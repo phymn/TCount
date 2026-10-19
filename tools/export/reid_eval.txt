@@ -1,0 +1,40 @@
+osnet_x0_25_msmt17.onnx        9.4ms/crop rank1=0.504 pos med=0.698 p10=0.567 | neg p99=0.705 p99.9=0.790 | maxImpostor/query med=0.787
+   th=0.5: TPR=0.973 FPR=0.35162
+   th=0.6: TPR=0.833 FPR=0.08597
+   th=0.65: TPR=0.677 FPR=0.03413
+   th=0.7: TPR=0.493 FPR=0.01140
+   th=0.75: TPR=0.291 FPR=0.00326
+   th=0.8: TPR=0.134 FPR=0.00074
+   th=0.85: TPR=0.040 FPR=0.00011
+osnet_x0_25_msmt17_w8.onnx     10.1ms/crop rank1=0.504 pos med=0.699 p10=0.568 | neg p99=0.707 p99.9=0.791 | maxImpostor/query med=0.790
+   th=0.5: TPR=0.973 FPR=0.36024
+   th=0.6: TPR=0.834 FPR=0.08894
+   th=0.65: TPR=0.679 FPR=0.03550
+   th=0.7: TPR=0.494 FPR=0.01187
+   th=0.75: TPR=0.292 FPR=0.00336
+   th=0.8: TPR=0.134 FPR=0.00075
+   th=0.85: TPR=0.041 FPR=0.00011
+osnet_x0_5_ca_w8.onnx          6.2ms/crop rank1=0.712 pos med=0.722 p10=0.571 | neg p99=0.691 p99.9=0.776 | maxImpostor/query med=0.791
+   th=0.5: TPR=0.965 FPR=0.25205
+   th=0.6: TPR=0.850 FPR=0.06233
+   th=0.65: TPR=0.730 FPR=0.02456
+   th=0.7: TPR=0.575 FPR=0.00817
+   th=0.75: TPR=0.404 FPR=0.00217
+   th=0.8: TPR=0.224 FPR=0.00043
+   th=0.85: TPR=0.080 FPR=0.00005
+osnet_ain_x1_0_ca_w8.onnx      18.6ms/crop rank1=0.752 pos med=0.750 p10=0.615 | neg p99=0.700 p99.9=0.784 | maxImpostor/query med=0.790
+   th=0.5: TPR=0.989 FPR=0.33498
+   th=0.6: TPR=0.925 FPR=0.07824
+   th=0.65: TPR=0.832 FPR=0.03024
+   th=0.7: TPR=0.696 FPR=0.01004
+   th=0.75: TPR=0.500 FPR=0.00281
+   th=0.8: TPR=0.280 FPR=0.00060
+   th=0.85: TPR=0.108 FPR=0.00007
+osnet_x0_25_line76_w8.onnx     11.7ms/crop rank1=0.680 pos med=0.734 p10=0.603 | neg p99=0.708 p99.9=0.788 | maxImpostor/query med=0.794
+   th=0.5: TPR=0.984 FPR=0.33541
+   th=0.6: TPR=0.905 FPR=0.08907
+   th=0.65: TPR=0.800 FPR=0.03622
+   th=0.7: TPR=0.637 FPR=0.01214
+   th=0.75: TPR=0.437 FPR=0.00321
+   th=0.8: TPR=0.220 FPR=0.00065
+   th=0.85: TPR=0.072 FPR=0.00009

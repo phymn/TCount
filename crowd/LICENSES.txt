@@ -1,0 +1,28 @@
+TCount Crowd — third-party components bundled in this folder
+=============================================================
+All run locally in the browser. Nothing is downloaded at runtime except the optional
+coco-ssd fallback (only used if ONNX Runtime fails; needs internet, loaded from jsDelivr).
+
+vendor/ort.webgpu.min.js, vendor/ort-wasm-simd-threaded.asyncify.{js,wasm}
+  ONNX Runtime Web 1.30.0 — MIT License, (c) Microsoft Corporation. https://github.com/microsoft/onnxruntime
+  (the .mjs glue file was renamed to .js so python http.server serves it with a JavaScript MIME type)
+
+models/yolox_nano_person_w8.onnx, models/yolox_tiny_person_w8.onnx
+  YOLOX (Megvii) — Apache License 2.0. https://github.com/Megvii-BaseDetection/YOLOX
+  Official COCO-trained weights, re-exported with dynamic input size, output sliced to the
+  person class, weights stored as int8 (per-channel, DequantizeLinear) — compute stays fp32.
+  Permissive: no AGPL obligations (unlike Ultralytics YOLOv8/YOLO11).
+
+models/osnet_x0_5_reid_w8.onnx
+  OSNet x0.5 from torchreid / deep-person-reid (Kaiyang Zhou) — MIT License.
+  https://github.com/KaiyangZhou/deep-person-reid  (MSMT17 combineall weights, int8 weights)
+  Note: trained on the MSMT17 research dataset; check dataset terms before commercial use.
+
+models/dmcount_qnrf_w8.onnx
+  DM-Count (cvlab-stonybrook) — MIT License. https://github.com/cvlab-stonybrook/DM-Count
+  UCF-QNRF weights, VGG19 backbone, int8 weights. UCF-QNRF is a research dataset; check its terms.
+
+coco-ssd fallback (not bundled): TensorFlow.js + coco-ssd — Apache License 2.0.
+
+Note: vendor/ort-wasm-simd-threaded.asyncify.js (MIT) is modified in one place: the shared WebAssembly
+memory maximum reads globalThis.__ortMaxPages (default 1 GB instead of 4 GB) so iOS Safari can reserve it.

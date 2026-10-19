@@ -1,0 +1,21 @@
+# large binaries: published as GitHub Release assets / fetched by tools/fetch_assets.sh
+crowd/vendor/ort-wasm-simd-threaded.asyncify.wasm
+crowd/models/dmcount_qnrf_w8.onnx
+*.zip
+*.pth
+*.pt
+*.y4m
+*.mp4
+*.log
+__pycache__/
+venv/
+.DS_Store
+# research/ dataset folders used by tools (not in repo)
+tools/**/YOLOX/
+tools/**/DM-Count/
+tools/**/deep-person-reid/
+tools/**/coco/
+tools/**/market/
+tools/**/testassets/
+tools/**/shots/
+tools/**/site/

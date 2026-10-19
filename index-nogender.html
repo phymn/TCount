@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <title>People Counter</title>
+  <style>
+    :root {
+      --bg: #0b0d10; --accent: #00e676; --blue: #00b0ff; --pink: #ff80ab;
+      --text: #eef0f4; --muted: #8b93a7; --danger: #ff5252; --border: #2a3140;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+    html, body { height: 100%; width: 100%; overflow: hidden; background: var(--bg); color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    #app { position: relative; width: 100%; height: 100%; }
+    #viewport { position: relative; width: 100%; height: 100%; background: #000; }
+    #video, #canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+    #canvas { pointer-events: none; }
+
+    #top-bar {
+      position: absolute; top: 0; left: 0; right: 0; z-index: 10;
+      padding: 10px 14px; padding-top: max(10px, env(safe-area-inset-top));
+      background: linear-gradient(to bottom, rgba(0,0,0,0.75), transparent);
+    }
+    #status { font-size: 12px; color: var(--muted); }
+    #status.ready { color: var(--accent); }
+    #status.error { color: var(--danger); }
+    #status.running { color: #ffd740; }
+
+    #stats {
+      position: absolute; top: 48px; left: 8px; right: 8px; z-index: 10;
+      display: flex; gap: 6px; flex-wrap: wrap;
+    }
+    .stat {
+      background: rgba(0,0,0,0.7); border: 1px solid var(--border);
+      border-radius: 10px; padding: 6px 10px; flex: 1; min-width: 70px;
+    }
+    .stat-label { font-size: 9px; text-transform: uppercase; color: var(--muted); letter-spacing: 0.5px; }
+    .stat-value { font-size: 18px; font-weight: 700; }
+    .blue { color: var(--blue); }
+    .green { color: var(--accent); }
+
+    #big {
+      position: absolute; bottom: 145px; left: 0; right: 0; text-align: center;
+      z-index: 5; pointer-events: none; text-shadow: 0 2px 14px #000;
+    }
+    #big-num { font-size: clamp(48px, 18vw, 88px); font-weight: 800; color: var(--accent); line-height: 1; }
+    #big-label { font-size: 12px; letter-spacing: 1.2px; color: rgba(255,255,255,0.7); text-transform: uppercase; }
+
+    #controls {
+      position: absolute; bottom: 0; left: 0; right: 0; z-index: 10;
+      padding: 14px; padding-bottom: max(14px, env(safe-area-inset-bottom));
+      background: linear-gradient(to top, rgba(0,0,0,0.88), transparent);
+      display: flex; flex-direction: column; gap: 10px; align-items: center;
+    }
+    .btn-row { display: flex; gap: 10px; width: 100%; max-width: 420px; }
+    button {
+      flex: 1; border: none; border-radius: 13px; padding: 14px; font-size: 15px; font-weight: 600;
+    }
+    button:disabled { opacity: 0.4; }
+    #startBtn { background: var(--accent); color: #000; }
+    #stopBtn { background: var(--danger); color: #fff; }
+    #switchBtn { background: #1a1d24; color: #fff; border: 1px solid var(--border); flex: 0 0 50px; }
+    #info { font-size: 11px; color: var(--muted); text-align: center; }
+
+    #result {
+      display: none; position: absolute; inset: 0; z-index: 30;
+      background: rgba(11,13,16,0.95); flex-direction: column;
+      align-items: center; justify-content: center; text-align: center; padding: 24px;
+    }
+    #result.visible { display: flex; }
+    #result h2 { font-size: 15px; color: var(--muted); margin-bottom: 4px; }
+    #final-total { font-size: clamp(52px, 20vw, 100px); font-weight: 800; color: var(--accent); }
+    #resetBtn { background: var(--accent); color: #000; max-width: 200px; padding: 14px 24px; border: none; border-radius: 13px; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div id="viewport">
+      <video id="video" playsinline muted autoplay></video>
+      <canvas id="canvas"></canvas>
+      <div id="top-bar"><div id="status">Ready — tap Start</div></div>
+
+      <div id="stats">
+        <div class="stat"><div class="stat-label">In Frame</div><div class="stat-value blue" id="current">0</div></div>
+        <div class="stat"><div class="stat-label">Unique</div><div class="stat-value green" id="unique">0</div></div>
+      </div>
+
+      <div id="big">
+        <div id="big-num">0</div>
+        <div id="big-label">unique people</div>
+      </div>
+    </div>
+
+    <div id="controls">
+      <div class="btn-row">
+        <button id="startBtn">Start Camera</button>
+        <button id="switchBtn" disabled>🔄</button>
+        <button id="stopBtn" disabled>Stop & Total</button>
+      </div>
+      <div id="info">All processing stays on your device</div>
+    </div>
+
+    <div id="result">
+      <h2>Final Unique Count</h2>
+      <div id="final-total">0</div>
+      <button id="resetBtn">Count Again</button>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3"></script>
+  <script>
+    class Tracker {
+      constructor() { this.reset(); this.maxAge = 14; this.minHits = 2; }
+      iou(a, b) {
+        const x1 = Math.max(a[0], b[0]), y1 = Math.max(a[1], b[1]);
+        const x2 = Math.min(a[0]+a[2], b[0]+b[2]), y2 = Math.min(a[1]+a[3], b[1]+b[3]);
+        const inter = Math.max(0, x2-x1) * Math.max(0, y2-y1);
+        return inter / (a[2]*a[3] + b[2]*b[3] - inter + 1e-6);
+      }
+      centroid(b) { return [b[0]+b[2]/2, b[1]+b[3]/2]; }
+      update(dets, w, h) {
+        const diag = Math.hypot(w, h) || 1, matchedT = new Set(), matchedD = new Set(), pairs = [];
+        this.tracks.forEach((tr, t) => dets.forEach((d, i) => {
+          const c2 = this.centroid(d);
+          const dist = Math.hypot(tr.centroid[0]-c2[0], tr.centroid[1]-c2[1]) / diag;
+          pairs.push({ t, d: i, score: this.iou(tr.bbox, d)*2 - dist });
+        }));
+        pairs.sort((a,b) => b.score - a.score);
+        for (const p of pairs) {
+          if (matchedT.has(p.t) || matchedD.has(p.d) || p.score < 0.15) continue;
+          matchedT.add(p.t); matchedD.add(p.d);
+          const tr = this.tracks[p.t];
+          tr.bbox = dets[p.d]; tr.centroid = this.centroid(dets[p.d]);
+          tr.timeSinceUpdate = 0; tr.hits++;
+          if (tr.hits >= this.minHits && !this.confirmed.has(tr.id)) { this.confirmed.add(tr.id); this.unique++; }
+        }
+        this.tracks.forEach((tr, t) => { if (!matchedT.has(t)) tr.timeSinceUpdate++; });
+        dets.forEach((d, i) => { if (!matchedD.has(i)) this.tracks.push({ id: this.nextId++, bbox: d, centroid: this.centroid(d), hits: 1, timeSinceUpdate: 0 }); });
+        this.tracks = this.tracks.filter(tr => tr.timeSinceUpdate <= this.maxAge);
+        return this.tracks.filter(tr => tr.timeSinceUpdate === 0 && this.confirmed.has(tr.id));
+      }
+      reset() { this.nextId = 1; this.tracks = []; this.confirmed = new Set(); this.unique = 0; }
+    }
+
+    let personModel = null, stream = null, running = false, timer = null, preferEnv = true, loopGen = 0;
+    const tracker = new Tracker();
+    const video = document.getElementById('video');
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const $ = id => document.getElementById(id);
+    function status(msg, cls = '') { $('status').textContent = msg; $('status').className = cls; }
+    function showError(where, e) { console.error(where, e); status(`${where}: ${e && (e.message || e.name) || e}`, 'error'); }
+
+    function updateUI(n = 0) {
+      $('current').textContent = n;
+      $('unique').textContent = tracker.unique;
+      $('big-num').textContent = tracker.unique;
+    }
+
+    async function loadModels() {
+      if (personModel) return;
+      status('Starting AI engine…', 'running');
+      await tf.setBackend('webgl').catch(() => tf.setBackend('cpu'));
+      await tf.ready();
+      status('Loading person model…', 'running');
+      personModel = await cocoSsd.load({ base: 'lite_mobilenet_v2' });
+      status('Model ready (' + tf.getBackend() + ') — starting camera', 'ready');
+    }
+
+    async function startCam() {
+      if (stream) stream.getTracks().forEach(t => t.stop());
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: false,
+          video: { facingMode: { ideal: preferEnv ? 'environment' : 'user' }, width: { ideal: 640 }, height: { ideal: 480 } } });
+        video.setAttribute('playsinline', ''); video.muted = true;
+        video.srcObject = stream;
+        await video.play();
+        await new Promise(r => video.videoWidth ? r() : (video.onloadedmetadata = r));
+        canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+        return true;
+      } catch (e) { showError('Camera error', e); return false; }
+    }
+
+    function draw(active) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.font = `bold ${Math.max(12, canvas.width/38)}px sans-serif`;
+      active.forEach(tr => {
+        const [x, y, w, h] = tr.bbox, label = `ID ${tr.id}`, ly = Math.max(20, y);
+        ctx.strokeStyle = '#00e676'; ctx.lineWidth = Math.max(2, canvas.width / 320); ctx.strokeRect(x, y, w, h);
+        ctx.fillStyle = '#00e676'; ctx.fillRect(x, ly - 20, ctx.measureText(label).width + 8, 20);
+        ctx.fillStyle = '#000'; ctx.fillText(label, x + 4, ly - 5);
+      });
+    }
+
+    async function loop(gen) {
+      if (!running || gen !== loopGen) return;
+      if (video.readyState < 2) { timer = setTimeout(() => loop(gen), 200); return; }
+      try {
+        const preds = await personModel.detect(video);
+        if (!running || gen !== loopGen) return;
+        const active = tracker.update(preds.filter(p => p.class === 'person' && p.score > 0.45).map(p => p.bbox), canvas.width, canvas.height);
+        draw(active); updateUI(active.length);
+      } catch (e) { showError('Detection error', e); }
+      if (running && gen === loopGen) timer = setTimeout(() => loop(gen), 150);
+    }
+    function startLoop() { if (timer) clearTimeout(timer); loopGen++; loop(loopGen); }
+
+    $('startBtn').onclick = async () => {
+      $('startBtn').disabled = true; status('Starting…', 'running');
+      try { await loadModels(); } catch (e) { showError('Model load failed', e); $('startBtn').disabled = false; return; }
+      if (!(await startCam())) { $('startBtn').disabled = false; return; }
+      tracker.reset(); updateUI(); running = true;
+      $('stopBtn').disabled = false; $('switchBtn').disabled = false;
+      $('startBtn').textContent = 'Running…'; status('Counting people…', 'running');
+      startLoop();
+    };
+    $('stopBtn').onclick = () => {
+      running = false; loopGen++; if (timer) clearTimeout(timer);
+      if (stream) stream.getTracks().forEach(t => t.stop());
+      stream = null; video.srcObject = null;
+      $('final-total').textContent = tracker.unique;
+      $('result').classList.add('visible'); status('Stopped', '');
+      $('startBtn').disabled = $('stopBtn').disabled = $('switchBtn').disabled = true;
+    };
+    $('switchBtn').onclick = async () => {
+      if (!running) return;
+      $('switchBtn').disabled = true; preferEnv = !preferEnv;
+      running = false; loopGen++; if (timer) clearTimeout(timer);
+      status('Switching camera…', 'running');
+      if (await startCam()) { running = true; status('Counting…', 'running'); startLoop(); }
+      $('switchBtn').disabled = false;
+    };
+    $('resetBtn').onclick = () => {
+      $('result').classList.remove('visible'); tracker.reset(); updateUI();
+      $('startBtn').disabled = false; $('startBtn').textContent = 'Start Camera';
+      $('stopBtn').disabled = $('switchBtn').disabled = true;
+      status('Ready — tap Start', 'ready'); ctx.clearRect(0, 0, canvas.width, canvas.height);
+    };
+    window.addEventListener('error', e => showError('Error', e.error || e.message));
+    window.addEventListener('unhandledrejection', e => showError('Error', e.reason));
+    if (!navigator.mediaDevices?.getUserMedia) { status('Camera not supported', 'error'); $('startBtn').disabled = true; }
+  </script>
+</body>
+</html>
