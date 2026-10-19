@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <title>People Counter — Crowd</title>
+  <style>
+    :root {
+      --bg: #0b0d10; --accent: #00e676; --blue: #00b0ff; --orange: #ffab40; --gray: #9aa3b5;
+      --text: #eef0f4; --muted: #8b93a7; --danger: #ff5252; --border: #2a3140; --warn: #ffd740;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+    html, body { height: 100%; width: 100%; overflow: hidden; background: var(--bg); color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    #app { position: relative; width: 100%; height: 100%; }
+    #viewport { position: relative; width: 100%; height: 100%; background: #000; overflow: hidden; }
+    #stage { position: absolute; inset: 0; transform-origin: 50% 50%; }
+    #video, #canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+    #canvas { pointer-events: none; }
+
+    #top-bar { position: absolute; top: 0; left: 0; right: 0; z-index: 10;
+      padding: 10px 14px; padding-top: max(10px, env(safe-area-inset-top));
+      background: linear-gradient(to bottom, rgba(0,0,0,0.8), transparent); }
+    #status { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    #status.ready { color: var(--accent); } #status.error { color: var(--danger); } #status.running { color: var(--warn); }
+    #chips { display: flex; gap: 4px; flex-wrap: nowrap; overflow-x: auto; margin-top: 4px; scrollbar-width: none; }
+    #chips::-webkit-scrollbar { display: none; }
+    .chip { flex: none; white-space: nowrap; font-size: 10px; padding: 2px 6px; border-radius: 8px; background: rgba(0,0,0,0.6); border: 1px solid var(--border); color: var(--gray); }
+    .chip.on { color: var(--accent); border-color: #1d5c3a; } .chip.warn { color: var(--warn); border-color: #6b5a14; }
+    .chip.bad { color: var(--danger); border-color: #6b1d1d; }
+
+    #banners { position: absolute; top: 64px; left: 8px; right: 8px; z-index: 12; display: flex; flex-direction: column; gap: 4px; }
+    .banner { font-size: 12px; padding: 7px 10px; border-radius: 9px; background: rgba(60,10,10,0.92); border: 1px solid #a33; color: #ffd6d6; }
+    .banner.warn { background: rgba(60,50,5,0.92); border-color: #a88a1a; color: #fff3c4; }
+    .banner.info { background: rgba(5,30,50,0.92); border-color: #1a6aa8; color: #d6ecff; }
+    .banner button { float: right; background: none; color: inherit; border: none; padding: 0 0 0 8px; font-size: 13px; flex: none; }
+
+    #stats { position: absolute; top: calc(max(10px, env(safe-area-inset-top)) + 46px); left: 8px; right: 8px; z-index: 10; display: flex; gap: 6px; flex-wrap: wrap; }
+    #banners { top: calc(max(10px, env(safe-area-inset-top)) + 104px); }
+    .stat { background: rgba(0,0,0,0.7); border: 1px solid var(--border); border-radius: 10px; padding: 6px 10px; flex: 1; min-width: 70px; }
+    .stat-label { font-size: 9px; text-transform: uppercase; color: var(--muted); letter-spacing: 0.5px; }
+    .stat-value { font-size: 18px; font-weight: 700; }
+    .stat-sub { font-size: 9px; color: var(--muted); }
+    .blue { color: var(--blue); } .green { color: var(--accent); } .orange { color: var(--orange); }
+    #stat-dupes { cursor: pointer; }
+
+    #big { position: absolute; bottom: 190px; left: 0; right: 0; text-align: center; z-index: 5; pointer-events: none; text-shadow: 0 2px 14px #000; }
+    #big-num { font-size: clamp(48px, 18vw, 88px); font-weight: 800; color: var(--accent); line-height: 1; }
+    #big-label { font-size: 12px; letter-spacing: 1.2px; color: rgba(255,255,255,0.75); text-transform: uppercase; }
+    #big-range { font-size: 13px; color: var(--orange); margin-top: 2px; min-height: 16px; }
+
+    #controls { position: absolute; bottom: 0; left: 0; right: 0; z-index: 10;
+      padding: 12px 14px; padding-bottom: max(12px, env(safe-area-inset-bottom));
+      background: linear-gradient(to top, rgba(0,0,0,0.9), transparent);
+      display: flex; flex-direction: column; gap: 8px; align-items: center; }
+    .btn-row { display: flex; gap: 8px; width: 100%; max-width: 440px; }
+    button { flex: 1; border: none; border-radius: 13px; padding: 14px; font-size: 15px; font-weight: 600; color: #fff; }
+    button:disabled { opacity: 0.4; }
+    #startBtn { background: var(--accent); color: #000; }
+    #stopBtn { background: var(--danger); color: #fff; }
+    #switchBtn { background: #1a1d24; border: 1px solid var(--border); flex: 0 0 50px; }
+    .small-row button { padding: 9px 4px; font-size: 12px; background: #1a1d24; border: 1px solid var(--border); border-radius: 10px; }
+    .small-row button.active { border-color: var(--accent); color: var(--accent); }
+    #zoomRow { display: flex; gap: 8px; align-items: center; width: 100%; max-width: 440px; font-size: 11px; color: var(--muted); }
+    #zoom { flex: 1; }
+    #info { font-size: 10px; color: var(--muted); text-align: center; max-width: 440px; }
+
+    .panel { display: none; position: absolute; left: 8px; right: 8px; bottom: 180px; top: 150px; z-index: 20; overflow-y: auto;
+      background: rgba(11,13,16,0.96); border: 1px solid var(--border); border-radius: 12px; padding: 12px; font-size: 12px; }
+    .panel.visible { display: block; }
+    .panel h3 { font-size: 13px; margin: 6px 0; color: var(--accent); }
+    .panel label { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 5px 0; border-bottom: 1px solid #1a1f29; }
+    .panel select, .panel input[type=number] { background: #1a1d24; color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 4px; font-size: 12px; max-width: 55%; }
+    .panel .close { position: sticky; top: 0; float: right; background: #1a1d24; padding: 4px 10px; flex: none; font-size: 12px; border-radius: 8px; }
+    #debugText { font-family: ui-monospace, Menlo, monospace; font-size: 10.5px; white-space: pre-wrap; color: #cfd6e4; }
+    .dupe { display: flex; gap: 8px; align-items: center; padding: 6px 0; border-bottom: 1px solid #1a1f29; }
+    .dupe img { width: 40px; height: 80px; object-fit: cover; border-radius: 4px; background: #222; }
+    .dupe .txt { flex: 1; } .dupe button { padding: 6px 8px; font-size: 11px; flex: none; background: #1a1d24; border: 1px solid var(--border); border-radius: 8px; }
+
+    #result { display: none; position: absolute; inset: 0; z-index: 30; background: rgba(11,13,16,0.96); flex-direction: column;
+      align-items: center; justify-content: center; text-align: center; padding: 24px; gap: 6px; }
+    #result.visible { display: flex; }
+    #result h2 { font-size: 15px; color: var(--muted); margin-bottom: 4px; }
+    #final-total { font-size: clamp(52px, 20vw, 100px); font-weight: 800; color: var(--accent); line-height: 1; }
+    #final-detail { font-size: 13px; color: var(--text); max-width: 380px; line-height: 1.5; }
+    #final-note { font-size: 11px; color: var(--muted); max-width: 380px; margin-bottom: 8px; }
+    #resetBtn { background: var(--accent); color: #000; max-width: 200px; padding: 14px 24px; }
+    #resultCsvBtn { background: #1a1d24; border: 1px solid var(--border); max-width: 200px; padding: 10px 20px; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div id="viewport">
+      <div id="stage">
+        <video id="video" playsinline muted autoplay></video>
+        <canvas id="canvas"></canvas>
+      </div>
+      <div id="top-bar">
+        <div id="status">Ready — tap Start</div>
+        <div id="chips">
+          <span class="chip" id="chip-backend">detector: —</span>
+          <span class="chip" id="chip-lens">lens: —</span>
+          <span class="chip" id="chip-dense">dense: off</span>
+          <span class="chip" id="chip-light">light: —</span>
+          <span class="chip" id="chip-fps">— fps</span>
+        </div>
+      </div>
+
+      <div id="stats">
+        <div class="stat"><div class="stat-label">In Frame</div><div class="stat-value blue" id="current">0</div></div>
+        <div class="stat"><div class="stat-label">Unique</div><div class="stat-value green" id="unique">0</div><div class="stat-sub" id="unique-range">&nbsp;</div></div>
+        <div class="stat" id="stat-dupes"><div class="stat-label">Possible dupes</div><div class="stat-value orange" id="dupes">0</div><div class="stat-sub">tap to review</div></div>
+        <div class="stat" id="stat-crowd" style="display:none"><div class="stat-label">Est. crowd</div><div class="stat-value orange" id="crowd">—</div><div class="stat-sub" id="crowd-sub">visible, ±</div></div>
+      </div>
+      <div id="banners"></div>
+
+      <div id="big">
+        <div id="big-num">0</div>
+        <div id="big-label">unique people</div>
+        <div id="big-range"></div>
+      </div>
+
+      <div class="panel" id="settingsPanel">
+        <button class="close" data-close="settingsPanel">Close</button>
+        <h3>Settings</h3>
+        <label>Detector <select id="setModel">
+          <option value="auto">Auto</option><option value="tiny">YOLOX-Tiny (accurate)</option>
+          <option value="nano">YOLOX-Nano (fast)</option><option value="cocossd">coco-ssd (old, needs internet)</option></select></label>
+        <label>Backend <select id="setBackend"><option value="auto">Auto (benchmark)</option><option value="webgpu">WebGPU</option><option value="wasm">WASM (CPU)</option></select></label>
+        <label>Detector input <select id="setSize"><option value="auto">Auto (adaptive)</option><option value="416">416</option><option value="512">512</option><option value="640">640</option><option value="800">800</option></select></label>
+        <label>Small-people tiling <select id="setTiles"><option value="auto">Auto</option><option value="on">Always</option><option value="off">Off</option></select></label>
+        <label>Dense crowd mode <select id="setDense"><option value="auto">Auto</option><option value="on">On</option><option value="off">Off</option></select></label>
+        <label>Lens policy <select id="setLensMode"><option value="auto">Auto (ladder)</option><option value="manual">Manual</option></select></label>
+        <label>Lens <select id="setLens"></select></label>
+        <label>Camera-motion compensation <select id="setCmc"><option value="on">On</option><option value="off">Off</option></select></label>
+        <label>Same-person threshold <input type="number" id="setHigh" step="0.01" min="0.3" max="0.99"></label>
+        <label>New-person threshold <input type="number" id="setLow" step="0.01" min="0.2" max="0.95"></label>
+        <label>Confirm frames before counting (default 2) <input type="number" id="setConfirm" step="1" min="1" max="20"></label>
+        <label>Multi-thread CPU (reloads page) <select id="setThreads"><option value="off">Off</option><option value="on">On (experimental)</option></select></label>
+        <p style="color:var(--muted);margin-top:8px">Re-ID scores: ≥ same-person threshold → same person (not recounted); below new-person threshold → new person; in between → “possible duplicate” for you to review. Changes apply immediately (detector/backend changes apply on next Start).</p>
+      </div>
+
+      <div class="panel" id="dupesPanel">
+        <button class="close" data-close="dupesPanel">Close</button>
+        <h3>Possible duplicates</h3>
+        <p style="color:var(--muted)">These people looked similar to someone already counted, but not similar enough to be sure. Each is currently counted (upper end of the range). Merge if it is the same person.</p>
+        <div id="dupesList"></div>
+      </div>
+
+      <div class="panel" id="selfTestPanel">
+        <button class="close" data-close="selfTestPanel">Close</button>
+        <h3>Self-test</h3>
+        <p style="color:var(--muted);font-size:12px">Checks every file the app needs (status, size, type) and what this browser supports. Screenshot this if something fails.</p>
+        <button id="selfTestRun">Run again</button>
+        <pre id="selfTestText" style="white-space:pre-wrap;font-size:10.5px;line-height:1.35"></pre>
+      </div>
+
+      <div class="panel" id="debugPanel">
+        <button class="close" data-close="debugPanel">Close</button>
+        <h3>Debug</h3>
+        <div id="debugText"></div>
+      </div>
+    </div>
+
+    <div id="controls">
+      <div id="zoomRow"><span>Zoom</span><input type="range" id="zoom" min="1" max="4" step="0.1" value="1" disabled><span id="zoomVal">1.0×</span>
+        <button id="torchBtn" style="display:none;flex:0 0 auto;padding:6px 10px;font-size:12px;background:#1a1d24;border:1px solid var(--border)">🔦 Torch</button></div>
+      <div class="btn-row small-row">
+        <button id="settingsBtn">⚙ Settings</button>
+        <button id="debugBtn">🐞 Debug</button>
+        <button id="csvBtn">⬇ CSV</button>
+        <button id="selfTestBtn">🩺 Self-test</button>
+      </div>
+      <div class="btn-row">
+        <button id="startBtn">Start Camera</button>
+        <button id="switchBtn" disabled>🔄</button>
+        <button id="stopBtn" disabled>Stop & Total</button>
+      </div>
+      <div id="info">All processing stays on your device. Appearance fingerprints are kept in memory only and erased on Count Again or when the page closes — nothing is uploaded.</div>
+    </div>
+
+    <div id="result">
+      <h2>Final Unique Count</h2>
+      <div id="final-total">0</div>
+      <div id="final-detail"></div>
+      <div id="final-note">Best estimate. A moving phone cannot guarantee an exact unique total across occlusions, darkness and revisits.</div>
+      <button id="resultCsvBtn">⬇ Export CSV</button>
+      <button id="resetBtn">Count Again</button>
+    </div>
+  </div>
+
+  <script>
+    window.__scriptErrors = [];
+    window.__ortLoadFailed = false;
+  </script>
+  <script src="vendor/ort.webgpu.min.js" onerror="window.__ortLoadFailed=true"></script>
+  <script src="app.js" onerror="document.getElementById('status').textContent='app.js failed to load — copy the whole crowd folder';document.getElementById('status').className='error'"></script>
+</body>
+</html>
