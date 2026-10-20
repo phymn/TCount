@@ -16,7 +16,7 @@ This covers two apps: the original counters (`index.html`, `index-nogender.html`
 | File | Role |
 |---|---|
 | `crowd/index.html` | UI: video and overlay canvas, counter tiles (In Frame, Unique, Possible dupes, Est. crowd), Start/Stop & Total/Count Again, ⚙ Settings, 🐞 Debug, 🩺 Self-test, ⬇ CSV, 🔦 Torch, zoom slider, lens list, possible-duplicate review sheet. Loads `vendor/ort.webgpu.min.js`, then `app.js`. |
-| `crowd/app.js` | The whole pipeline (version `crowd-1.1`): asset loader, ORT setup, detectors, re-ID, Kalman/ByteTrack, motion estimator, ledger, camera/lens manager, light logic, identity decisions, auto policies, drawing, CSV, self-test, settings. |
+| `crowd/app.js` | The whole pipeline (version `crowd-1.2`): asset loader (Cache API + warm prefetch), ORT setup, detectors, deferred re-ID, Kalman/ByteTrack, motion estimator, ledger, camera/lens manager, light logic, identity decisions, auto policies, drawing, CSV, self-test, settings. |
 | `crowd/dense-worker.js` | Web Worker running DM-Count on a second ORT runtime, so the camera loop never freezes. It returns a density map whose sum is the estimated count. |
 | `crowd/sw.js` | Optional service worker (Settings → Multi-thread CPU). It adds COOP/COEP/CORP headers to same-origin responses, which `python -m http.server` can't send, so threaded WASM becomes possible. Nothing is cached. |
 | `crowd/vendor/ort.webgpu.min.js` | ONNX Runtime Web 1.30.0 (WebGPU and WASM) |

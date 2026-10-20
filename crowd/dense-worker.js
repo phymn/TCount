@@ -3,7 +3,7 @@
 let session = null, ep = 'wasm';
 async function getModel(url) {
   let res;
-  try { res = await fetch(url, { cache: 'no-store' }); } catch (e) { throw new Error('density model request failed: ' + (e.message || e)); }
+  try { res = await fetch(url, { cache: 'force-cache' }); } catch (e) { throw new Error('density model request failed: ' + (e.message || e)); }
   if (!res.ok) throw new Error(`models/dmcount_qnrf_w8.onnx: HTTP ${res.status}${res.status === 404 ? ' — part 2 zip not unzipped into crowd/models' : ''}`);
   const b = new Uint8Array(await res.arrayBuffer());
   if (b.length !== 21560628) throw new Error(`models/dmcount_qnrf_w8.onnx is incomplete (${b.length} of 21560628 bytes) — re-copy part 2`);
