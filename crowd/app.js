@@ -8,10 +8,11 @@
 (() => {
 const $ = id => document.getElementById(id);
 const Q = new URLSearchParams(location.search);
-const VERSION = 'crowd-1.1';
+const VERSION = 'crowd-1.2';
 const now = () => performance.now();
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const abs = p => new URL(p, location.href).href;
+const CACHE_NAME = 'tcount-crowd-assets-v1';
 
 // ------------------------------------------------------------------ settings
 const DEFAULTS = { model: 'auto', backend: 'auto', size: 'auto', tiles: 'auto', dense: 'auto', lensMode: 'auto', cmc: 'on',
@@ -61,64 +62,114 @@ const ASSETS = [
 ];
 const expectedSize = rel => { const a = ASSETS.find(x => x[0] === rel); return a ? a[1] : 0; };
 const MB = n => (n / 1048576).toFixed(1) + ' MB';
-// Fetch a file as bytes with progress and a precise error (URL, HTTP status, content-type, size).
-async function fetchAsset(rel, onProgress, timeoutMs = 180000) {
-  const url = abs(rel), exp = expectedSize(rel), t0 = now();
-  const ctl = typeof AbortController !== 'undefined' ? new AbortController() : null;
-  const timer = ctl && setTimeout(() => ctl.abort(), timeoutMs);
-  let res;
-  try { res = await fetch(url, { cache: 'no-store', signal: ctl && ctl.signal }); }
-  catch (e) { clearTimeout(timer); throw new Error(`${rel}: request failed (${e.name === 'AbortError' ? 'timed out after ' + timeoutMs / 1000 + ' s' : e.message || e}) — is python3 -m http.server still running in iSH?`); }
-  const ct = res.headers.get('content-type') || '?';
-  if (!res.ok) { clearTimeout(timer); throw new Error(`${rel}: HTTP ${res.status} ${res.statusText || ''} (${url})${res.status === 404 ? (/dmcount/.test(rel) ? ' — part 2 zip not unzipped into crowd/models' : ' — file missing: copy/unzip the whole crowd folder (part 1) again') : ''}`); }
-  if (/text\/html/.test(ct) && !/\.html$/.test(rel)) { clearTimeout(timer); throw new Error(`${rel}: server returned an HTML page instead of the file (${url})`); }
-  let buf;
-  try {
-    if (res.body && res.body.getReader && onProgress) {
-      const rd = res.body.getReader(), parts = []; let n = 0, lastP = 0;
-      for (;;) { const { done, value } = await rd.read(); if (done) break; parts.push(value); n += value.length; if (now() - lastP > 300) { lastP = now(); onProgress(n, exp || +res.headers.get('content-length') || 0); } }
-      const u = new Uint8Array(n); let o = 0; for (const p of parts) { u.set(p, o); o += p.length; } buf = u;
-    } else buf = new Uint8Array(await res.arrayBuffer());
-  } catch (e) { throw new Error(`${rel}: download interrupted after ${((now() - t0) / 1000).toFixed(0)} s (${e.name === 'AbortError' ? 'timed out' : e.message || e})`); }
-  finally { clearTimeout(timer); }
-  if (exp && buf.length !== exp) throw new Error(`${rel}: file is incomplete/corrupt — got ${buf.length} bytes, expected ${exp}. Re-copy/unzip it.`);
-  loadDiag.push(`${rel}: ${MB(buf.length)} in ${((now() - t0) / 1000).toFixed(1)} s, HTTP ${res.status}, ${ct}`);
-  return buf;
-}
 const loadDiag = []; // shown in Debug and in error banners
-let ortReady = false, ortWasmBytes = null;
+const assetBytes = new Map(); // in-memory bytes for this page (wasm + models)
+const inflightAssets = new Map(); // dedupe parallel/warm fetches of the same path
+async function cacheGet(rel) {
+  if (!('caches' in window)) return null;
+  try {
+    const c = await caches.open(CACHE_NAME);
+    const r = await c.match(abs(rel));
+    if (!r) return null;
+    const buf = new Uint8Array(await r.arrayBuffer());
+    const exp = expectedSize(rel);
+    if (exp && buf.length !== exp) { try { await c.delete(abs(rel)); } catch (e) {} return null; }
+    return buf;
+  } catch (e) { return null; }
+}
+async function cachePut(rel, buf) {
+  if (!('caches' in window)) return;
+  try {
+    const c = await caches.open(CACHE_NAME);
+    await c.put(abs(rel), new Response(buf, { headers: { 'Content-Type': 'application/octet-stream', 'Content-Length': String(buf.length) } }));
+  } catch (e) { /* private mode / quota — HTTP cache may still help */ }
+}
+// Fetch a file as bytes with progress and a precise error (URL, HTTP status, content-type, size).
+// Uses Cache API + default HTTP cache (repeat visits skip the 26 MB+ re-download). Size checks still catch corrupt copies.
+async function fetchAsset(rel, onProgress, timeoutMs = 180000) {
+  if (assetBytes.has(rel)) { const b = assetBytes.get(rel); onProgress && onProgress(b.length, b.length); return b; }
+  if (inflightAssets.has(rel)) {
+    const b = await inflightAssets.get(rel);
+    onProgress && onProgress(b.length, b.length);
+    return b;
+  }
+  const p = (async () => {
+    const url = abs(rel), exp = expectedSize(rel), t0 = now();
+    let buf = await cacheGet(rel);
+    if (buf) {
+      loadDiag.push(`${rel}: ${MB(buf.length)} from Cache API in ${((now() - t0) / 1000).toFixed(2)} s`);
+      onProgress && onProgress(buf.length, buf.length);
+      assetBytes.set(rel, buf);
+      return buf;
+    }
+    const ctl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timer = ctl && setTimeout(() => ctl.abort(), timeoutMs);
+    let res;
+    try { res = await fetch(url, { cache: 'force-cache', signal: ctl && ctl.signal }); }
+    catch (e) { clearTimeout(timer); throw new Error(`${rel}: request failed (${e.name === 'AbortError' ? 'timed out after ' + timeoutMs / 1000 + ' s' : e.message || e}) — is python3 -m http.server still running in iSH?`); }
+    const ct = res.headers.get('content-type') || '?';
+    if (!res.ok) { clearTimeout(timer); throw new Error(`${rel}: HTTP ${res.status} ${res.statusText || ''} (${url})${res.status === 404 ? (/dmcount/.test(rel) ? ' — part 2 zip not unzipped into crowd/models' : ' — file missing: copy/unzip the whole crowd folder (part 1) again') : ''}`); }
+    if (/text\/html/.test(ct) && !/\.html$/.test(rel)) { clearTimeout(timer); throw new Error(`${rel}: server returned an HTML page instead of the file (${url})`); }
+    try {
+      if (res.body && res.body.getReader && onProgress) {
+        const rd = res.body.getReader(), parts = []; let n = 0, lastP = 0;
+        for (;;) { const { done, value } = await rd.read(); if (done) break; parts.push(value); n += value.length; if (now() - lastP > 300) { lastP = now(); onProgress(n, exp || +res.headers.get('content-length') || 0); } }
+        const u = new Uint8Array(n); let o = 0; for (const p of parts) { u.set(p, o); o += p.length; } buf = u;
+      } else buf = new Uint8Array(await res.arrayBuffer());
+    } catch (e) { throw new Error(`${rel}: download interrupted after ${((now() - t0) / 1000).toFixed(0)} s (${e.name === 'AbortError' ? 'timed out' : e.message || e})`); }
+    finally { clearTimeout(timer); }
+    if (exp && buf.length !== exp) throw new Error(`${rel}: file is incomplete/corrupt — got ${buf.length} bytes, expected ${exp}. Re-copy/unzip it.`);
+    loadDiag.push(`${rel}: ${MB(buf.length)} in ${((now() - t0) / 1000).toFixed(1)} s, HTTP ${res.status}, ${ct}`);
+    assetBytes.set(rel, buf);
+    cachePut(rel, buf); // fire-and-forget
+    return buf;
+  })();
+  inflightAssets.set(rel, p);
+  try { return await p; }
+  finally { inflightAssets.delete(rel); }
+}
+let ortReady = false, ortWasmBytes = null, ortSetupP = null;
 function withTimeout(p, ms, what) { let t; return Promise.race([p, new Promise((_, rej) => { t = setTimeout(() => rej(new Error(what + ' timed out after ' + ms / 1000 + ' s')), ms); })]).finally(() => clearTimeout(t)); }
 async function setupOrt(onS) {
   if (typeof ort === 'undefined') return false;
   if (ortReady) return true;
-  // iOS Safari: the runtime asks for a 4 GB shared memory reservation, which iOS can refuse ("Out of memory").
-  // 1 GB is plenty for these models. Override with ?maxmem=<MB>.
-  globalThis.__ortMaxPages = Math.round((+Q.get('maxmem') || 1024) * 16);
-  ort.env.wasm.wasmPaths = { mjs: abs('vendor/ort-wasm-simd-threaded.asyncify.js'), wasm: abs('vendor/ort-wasm-simd-threaded.asyncify.wasm') };
-  ort.env.wasm.numThreads = window.crossOriginIsolated ? Math.min(4, navigator.hardwareConcurrency || 2) : 1; // threads need COOP/COEP; python http.server cannot send them
-  ort.env.wasm.proxy = false;
-  ort.env.logLevel = 'error';
-  // Download the 26 MB runtime once ourselves: python http.server (iSH) often sends .wasm as application/octet-stream,
-  // which makes Safari's streaming compile fail and re-download it; handing over the bytes avoids both problems.
-  try {
-    ortWasmBytes = await fetchAsset('vendor/ort-wasm-simd-threaded.asyncify.wasm', (n, t) => onS && onS(`Downloading AI runtime ${MB(n)}${t ? ' / ' + MB(t) : ''}…`));
-    ort.env.wasm.wasmBinary = ortWasmBytes;
-  } catch (e) { loadDiag.push('runtime prefetch failed: ' + e.message); throw e; }
-  ortReady = true; return true;
+  if (ortSetupP) return ortSetupP;
+  ortSetupP = (async () => {
+    // iOS Safari: the runtime asks for a 4 GB shared memory reservation, which iOS can refuse ("Out of memory").
+    // 1 GB is plenty for these models. Override with ?maxmem=<MB>.
+    globalThis.__ortMaxPages = Math.round((+Q.get('maxmem') || 1024) * 16);
+    ort.env.wasm.wasmPaths = { mjs: abs('vendor/ort-wasm-simd-threaded.asyncify.js'), wasm: abs('vendor/ort-wasm-simd-threaded.asyncify.wasm') };
+    ort.env.wasm.numThreads = window.crossOriginIsolated ? Math.min(4, navigator.hardwareConcurrency || 2) : 1; // threads need COOP/COEP; python http.server cannot send them
+    ort.env.wasm.proxy = false;
+    ort.env.logLevel = 'error';
+    // Download the 26 MB runtime once ourselves: python http.server (iSH) often sends .wasm as application/octet-stream,
+    // which makes Safari's streaming compile fail and re-download it; handing over the bytes avoids both problems.
+    try {
+      ortWasmBytes = await fetchAsset('vendor/ort-wasm-simd-threaded.asyncify.wasm', (n, t) => onS && onS(`Downloading AI runtime ${MB(n)}${t ? ' / ' + MB(t) : ''}…`));
+      ort.env.wasm.wasmBinary = ortWasmBytes;
+    } catch (e) { loadDiag.push('runtime prefetch failed: ' + e.message); ortSetupP = null; throw e; }
+    ortReady = true; return true;
+  })();
+  return ortSetupP;
 }
 function errText(e) { return e ? ((e.name && e.name !== 'Error' ? e.name + ': ' : '') + (e.message || String(e))) : 'unknown error'; }
+let webgpuCached = undefined;
 async function webgpuAvailable() {
-  try { if (!navigator.gpu) return false; const a = await navigator.gpu.requestAdapter(); return !!a; } catch (e) { return false; }
+  if (webgpuCached !== undefined) return webgpuCached;
+  try { if (!navigator.gpu) return (webgpuCached = false); const a = await navigator.gpu.requestAdapter(); return (webgpuCached = !!a); } catch (e) { return (webgpuCached = false); }
 }
-const modelBytes = new Map();
 async function makeSession(url, ep, onS) {
-  const rel = url.replace(abs('./'), '');
-  let bytes = modelBytes.get(rel);
-  if (!bytes) { bytes = await fetchAsset(rel, (n, t) => onS && onS(`Downloading ${rel.split('/').pop()} ${MB(n)} / ${MB(t)}…`)); modelBytes.set(rel, bytes); }
+  const rel = url.replace(abs('./'), '').replace(/^\.\//, '');
+  const bytes = await fetchAsset(rel, (n, t) => onS && onS(`Downloading ${rel.split('/').pop()} ${MB(n)}${t ? ' / ' + MB(t) : ''}…`));
   const opts = { executionProviders: [ep], graphOptimizationLevel: 'all' };
   try { return await withTimeout(ort.InferenceSession.create(bytes, opts), ep === 'webgpu' ? 45000 : 120000, `${rel} on ${ep}`); }
   catch (e) { throw new Error(`${rel} on ${ep}: ${errText(e)}`); }
 }
+function detectorKindForAuto(gpu) {
+  // Prefer Nano on CPU-only devices so Auto does not download Tiny (5 MB) then throw it away.
+  return gpu ? 'tiny' : 'nano';
+}
+function releaseAsset(rel) { assetBytes.delete(rel); }
 
 // ------------------------------------------------------------------ geometry
 function iou(a, b) { // boxes [x,y,w,h]
@@ -163,8 +214,8 @@ class YoloxDetector {
       const t0 = now(); const s = await makeSession(this.url, ep, onStatus);
       const x = new ort.Tensor('float32', new Float32Array(3 * 320 * 320).fill(114), [1, 3, 320, 320]);
       await withTimeout(s.run({ images: x }), 60000, 'first run on ' + ep); // warm-up / shader compile
-      const t1 = now(); await s.run({ images: x }); await s.run({ images: x });
-      return { s, ep, createMs: t1 - t0, runMs: (now() - t1) / 2 };
+      const t1 = now(); await s.run({ images: x }); // one timed run is enough for backend pick
+      return { s, ep, createMs: t1 - t0, runMs: now() - t1 };
     };
     const gpu = await webgpuAvailable();
     this.webgpuAvailable = gpu;
@@ -250,10 +301,11 @@ class CocoSsdDetector {
 // ------------------------------------------------------------------ Re-ID (OSNet x0.5)
 class ReID {
   constructor() { this.session = null; this.ok = false; this.lastMs = 0; this.name = 'OSNet-x0.5'; }
-  async load(ep) {
+  async load(ep, onStatus) {
     const url = abs('models/osnet_x0_5_reid_w8.onnx');
-    try { this.session = await makeSession(url, ep, status); this.ep = ep; await this.embed([[0, 0, 8, 16]]); }
-    catch (e) { if (ep === 'wasm') throw e; logErr('reid-' + ep, e); this.session = await makeSession(url, 'wasm', status); this.ep = 'wasm'; await this.embed([[0, 0, 8, 16]]); }
+    const onS = onStatus || (() => {});
+    try { this.session = await makeSession(url, ep, onS); this.ep = ep; await this.embed([[0, 0, 8, 16]]); }
+    catch (e) { if (ep === 'wasm') throw e; logErr('reid-' + ep, e); this.session = await makeSession(url, 'wasm', onS); this.ep = 'wasm'; await this.embed([[0, 0, 8, 16]]); }
     this.ok = true; return this;
   }
   async embed(boxes) { // boxes in frameCanvas coords -> L2-normalized Float32Array[512]
@@ -636,29 +688,75 @@ function markLensChange(why) {
   ledger.events.push({ t: Date.now(), type: 'lens', why });
 }
 
+let reidLoadP = null;
+function ensureReid(ep) {
+  if (reid && reid.ok) return Promise.resolve(reid);
+  if (reidLoadP) return reidLoadP;
+  reidLoadP = (async () => {
+    try {
+      // Quiet progress: do not steal the "Counting…" status once the loop is up.
+      const onS = m => { if (!running) status(m, 'running'); };
+      if (!running) onS('Loading re-ID model…');
+      reid = await new ReID().load(ep, onS);
+      banner('reid');
+      releaseAsset('models/osnet_x0_5_reid_w8.onnx');
+      loadDiag.push('re-ID ready (' + reid.ep + ')');
+      return reid;
+    } catch (e) {
+      logErr('reid', e); reid = null; reidLoadP = null;
+      loadDiag.push('re-ID failed: ' + errText(e));
+      banner('reid', 'Re-ID model failed to load — people who leave and come back may be counted again. (' + errText(e) + ')', 'warn');
+      return null;
+    }
+  })();
+  return reidLoadP;
+}
+
 async function loadModels() {
   const want = S.model, key = want + '|' + S.backend;
   if (detector && loadedKey === key) return;
-  detector = null; reid = null;
+  detector = null; reid = null; reidLoadP = null;
   const onS = m => status(m, 'running');
   let ortOk = false;
+  const gpuHint = want !== 'cocossd' ? await webgpuAvailable() : false;
+  const kind = want === 'auto' ? detectorKindForAuto(gpuHint && !Q.get('nogpu')) : want;
+  // Overlap runtime download with detector (and re-ID) bytes — the big wins on cold iSH / first visit.
+  const detRel = want !== 'cocossd' && kind !== 'cocossd' ? `models/yolox_${kind}_person_w8.onnx` : null;
+  const prog = { runtime: '', detector: '' };
+  const showProg = () => {
+    const parts = [prog.runtime, prog.detector].filter(Boolean);
+    if (parts.length) onS('Downloading ' + parts.join(' · ') + '…');
+  };
+  const detPrefetch = detRel ? fetchAsset(detRel, (n, t) => { prog.detector = `detector ${MB(n)}${t ? '/' + MB(t) : ''}`; showProg(); }).catch(e => { loadDiag.push('detector prefetch: ' + errText(e)); return null; }) : null;
+  const reidPrefetch = want !== 'cocossd' ? fetchAsset('models/osnet_x0_5_reid_w8.onnx').catch(e => { loadDiag.push('re-ID prefetch: ' + errText(e)); return null; }) : null;
   if (want !== 'cocossd') {
-    try { ortOk = await setupOrt(onS); }
-    catch (e) { logErr('ort-setup', e); banner('model', 'AI runtime could not be downloaded: ' + errText(e) + ' — tap 🩺 Self-test and screenshot it. Trying the coco-ssd fallback (needs internet).'); }
+    try {
+      ortOk = await setupOrt((m) => {
+        // setupOrt status strings already include "AI runtime …"; keep combined line when detector is also mid-flight.
+        if (/AI runtime/.test(m)) { prog.runtime = m.replace(/^Downloading\s+/i, ''); showProg(); }
+        else onS(m);
+      });
+    } catch (e) { logErr('ort-setup', e); banner('model', 'AI runtime could not be downloaded: ' + errText(e) + ' — tap 🩺 Self-test and screenshot it. Trying the coco-ssd fallback (needs internet).'); }
   }
+  if (detPrefetch) await detPrefetch;
   if (want !== 'cocossd' && ortOk) {
     try {
-      const kind = want === 'auto' ? 'tiny' : want;
       let d;
       try { d = await new YoloxDetector(kind).load(S.backend, onS); }
-      catch (e) { if (kind !== 'tiny') throw e; loadDiag.push('YOLOX-Tiny failed: ' + errText(e)); logErr('tiny', e); onS('YOLOX-Tiny failed — trying YOLOX-Nano…'); d = await new YoloxDetector('nano').load(S.backend, onS); }
+      catch (e) {
+        if (kind !== 'tiny') throw e;
+        loadDiag.push('YOLOX-Tiny failed: ' + errText(e)); logErr('tiny', e);
+        onS('YOLOX-Tiny failed — trying YOLOX-Nano…');
+        d = await new YoloxDetector('nano').load(S.backend, onS);
+      }
       if (want === 'auto' && d.ep === 'wasm' && d.benchMs > 60 && d.kind === 'tiny') {
         onS('CPU backend is slow for YOLOX-Tiny — using YOLOX-Nano…');
         try { d.session.release && await d.session.release(); } catch (e) {} // free memory before the second model (iPhone)
-        modelBytes.delete('models/yolox_tiny_person_w8.onnx');
+        releaseAsset('models/yolox_tiny_person_w8.onnx');
         d = await new YoloxDetector('nano').load('wasm', onS);
       }
       detector = d; banner('model');
+      releaseAsset(`models/yolox_${d.kind}_person_w8.onnx`);
     } catch (e) {
       logErr('model', e); loadDiag.push('YOLOX failed: ' + errText(e));
       banner('model', 'YOLOX model failed to load: ' + errText(e) + ' — tap 🩺 Self-test and screenshot it. Trying the coco-ssd fallback (needs internet).');
@@ -669,13 +767,36 @@ async function loadModels() {
     catch (e) { banner('model2', 'coco-ssd fallback also failed: ' + (e.message || e)); throw new Error('No detector could be loaded'); }
   }
   if (detector instanceof YoloxDetector) {
-    try { onS('Loading re-ID model…'); reid = await new ReID().load(detector.ep); banner('reid'); }
-    catch (e) { logErr('reid', e); reid = null; loadDiag.push('re-ID failed: ' + errText(e)); banner('reid', 'Re-ID model failed to load — people who leave and come back may be counted again. (' + errText(e) + ')', 'warn'); }
-    for (const k of [...modelBytes.keys()]) modelBytes.delete(k); // sessions own their copies now
+    // Core counting starts without waiting for OSNet; re-ID attaches when ready.
+    if (reidPrefetch) reidPrefetch.then(() => ensureReid(detector.ep));
+    else ensureReid(detector.ep);
     if (!detector.webgpuAvailable) banner('gpu', 'WebGPU is not available here — running on the CPU (WASM). Safari 26 / iOS 26 enables WebGPU.', 'info');
   } else banner('reid', 'Re-ID is unavailable with the coco-ssd fallback — people who leave and return may be recounted.', 'warn');
   st.size = S.size === 'auto' ? (detector.ep === 'webgpu' ? 640 : 512) : +S.size;
   loadedKey = key;
+}
+
+// Start downloading the AI runtime (+ default detector) before the user taps Start.
+function warmPrefetch() {
+  if (location.protocol === 'file:' || typeof ort === 'undefined' || S.model === 'cocossd') return;
+  const run = async () => {
+    try {
+      const onS = m => { if (!running && !detector) status(m, 'ready'); };
+      status('Preparing AI models…', 'ready');
+      const gpu = await webgpuAvailable();
+      const kind = S.model === 'auto' ? detectorKindForAuto(gpu && !Q.get('nogpu')) : (S.model === 'tiny' || S.model === 'nano' ? S.model : 'nano');
+      const detRel = `models/yolox_${kind}_person_w8.onnx`;
+      // Parallel: 26 MB runtime + detector ONNX (re-ID waits until Start so we don't thrash iPhone memory early).
+      await Promise.all([
+        setupOrt(onS),
+        fetchAsset(detRel, (n, t) => onS(`Preparing detector ${MB(n)}${t ? ' / ' + MB(t) : ''}…`)),
+      ]);
+      if (!running && !detector) status('Ready — tap Start', 'ready');
+      loadDiag.push('warm prefetch done');
+    } catch (e) { loadDiag.push('warm prefetch: ' + errText(e)); if (!running && !detector) status('Ready — tap Start', 'ready'); }
+  };
+  if (typeof requestIdleCallback === 'function') requestIdleCallback(() => { run(); }, { timeout: 1500 });
+  else setTimeout(run, 200);
 }
 
 // ---------------------------------------------------------------- per-frame processing
@@ -814,6 +935,8 @@ async function processIdentities(tracked, W, H, dets) {
     if (t.personId || paused || t.hits < confirmFrames()) continue;
     if ((t.hiHits || 0) < confirmFrames()) continue; // only confidently-detected tracks may add a person (blocks dark-noise / fragment boxes)
     if (reid && !t.emb.length && t.waitFrames++ < CFG.reidWaitFrames) continue; // no usable crop yet (cut off / overlapping): wait a few frames at most
+    // Re-ID is deferred after first count: briefly wait so early people get embeddings when the model lands mid-session.
+    if (!reid && reidLoadP && t.waitFrames++ < CFG.reidWaitFrames + 8) continue;
     const thumb = thumbOf(t.detBox || t.box);
     if (!t.emb.length) {
       const carryC = carryCandidate(new Set([...held.keys(), ...t.co]), null);
@@ -1020,7 +1143,7 @@ function renderDebug() {
     `detector: ${detector ? detector.name + ' / ' + detector.ep : '—'}  input=${st.size} (${detector && detector.lastIn || '—'})  tiles=${st.tiles}${st.tiles ? ' (' + st.tilesWhy + ')' : ''}  gain=${detector ? detector.gain.toFixed(2) : '—'}`,
     detector && detector.bench ? `bench: ${detector.bench.join(' | ')}` : '',
     detector && detector.loadErrors && detector.loadErrors.length ? `load notes: ${detector.loadErrors.join(' | ')}` : '',
-    `re-id: ${reid ? reid.name + ' / ' + reid.ep + ' ' + reid.lastMs.toFixed(0) + ' ms/batch' : 'off'}  queue=${st.reidQueue}  same≥${S.high}  new<${S.low}`,
+    `re-id: ${reid ? reid.name + ' / ' + reid.ep + ' ' + reid.lastMs.toFixed(0) + ' ms/batch' : reidLoadP ? 'loading…' : 'off'}  queue=${st.reidQueue}  same≥${S.high}  new<${S.low}`,
     `ms: grab ${f(T.grab)}  cmc ${f(T.cmc)}  det ${f(T.det)} (last net ${detector ? f(detector.lastMs) : '—'})  track ${f(T.track)}  reid ${f(T.reid)}  →  ${st.fps.toFixed(1)} fps`,
     `cmc: dx=${motion.last.dx.toFixed(1)} dy=${motion.last.dy.toFixed(1)} px  inliers=${(motion.last.conf || 0).toFixed(2)}  blocks=${motion.last.n || 0}`,
     `light: ${st.light}  brightness median=${st.lumaMed ?? '—'} mean=${st.lumaMean != null ? st.lumaMean.toFixed(0) : '—'} p98=${st.lumaP98 ?? '—'} smoothed=${st.lumaEma.toFixed(0)} (dark<${CFG.darkLuma}, very dark<${CFG.veryDarkLuma}, ok>${CFG.lightExitLuma})  frame grab=${GRAB_MODES[st.grabMode || 0]} blackRun=${st.blackRun || 0}  confirm=${confirmFrames()} frames  torch=${cam.caps.torch ? (cam.torchOn ? 'on' : 'off') : 'n/a'}`,
@@ -1093,10 +1216,17 @@ function startLoop() { loopGen++; const g = loopGen; loop(g); if (!rafId) render
 $('startBtn').onclick = async () => {
   $('startBtn').disabled = true; status('Starting…', 'running');
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { status('Camera API unavailable (needs 127.0.0.1 or https)', 'error'); $('startBtn').disabled = false; return; }
+  // Overlap camera permission/open with remaining model work (warm prefetch may already have ORT+detector ready).
+  const modelsP = loadModels().then(() => null, e => e);
   try { await openCamera({ label: S.lensMode === 'manual' ? S.lens : '' }); }
-  catch (e) { status('Camera error: ' + (e.message || e.name), 'error'); banner('cam', 'Camera error: ' + (e.message || e.name) + '. Allow camera access for this site in Safari.'); $('startBtn').disabled = false; return; }
+  catch (e) {
+    status('Camera error: ' + (e.message || e.name), 'error');
+    banner('cam', 'Camera error: ' + (e.message || e.name) + '. Allow camera access for this site in Safari.');
+    $('startBtn').disabled = false; return;
+  }
   await enumerateCams(); // labels only appear after permission
-  try { await loadModels(); } catch (e) { status('Model load failed: ' + (e.message || e), 'error'); $('startBtn').disabled = false; return; }
+  const modelErr = await modelsP;
+  if (modelErr) { status('Model load failed: ' + (modelErr.message || modelErr), 'error'); $('startBtn').disabled = false; return; }
   tracker.reset(); motion.reset(); st.csv = []; st.lastLensSwitch = now(); st.lumaEma = -1; st.runStart = now(); st.camStart = now(); st.light = 'ok'; st.lightPendSince = 0; st.blackRun = 0;
   running = true;
   $('stopBtn').disabled = false; $('switchBtn').disabled = false; $('startBtn').textContent = 'Running…';
@@ -1221,4 +1351,5 @@ window.addEventListener('error', e => logErr('Error', e.error || e.message));
 window.addEventListener('unhandledrejection', e => logErr('Promise', e.reason));
 if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) status('Camera not available here (needs 127.0.0.1 or https)', 'error');
 uiTick();
+warmPrefetch();
 })();
