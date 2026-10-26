@@ -1,7 +1,7 @@
 /* Dense-crowd density estimation (DM-Count, MIT) in a worker so the camera loop never freezes.
    Output: density map whose sum = estimated number of visible people. No identities, no images kept. */
 let session = null, ep = 'wasm';
-async function getModel(url) {
+async function getModel(url) { // fallback only; the page normally passes modelBytes so this file is not fetched twice
   let res;
   try { res = await fetch(url, { cache: 'no-store' }); } catch (e) { throw new Error('density model request failed: ' + (e.message || e)); }
   if (!res.ok) throw new Error(`models/dmcount_qnrf_w8.onnx: HTTP ${res.status}${res.status === 404 ? ' — part 2 zip not unzipped into crowd/models' : ''}`);
@@ -18,7 +18,10 @@ self.onmessage = async (e) => {
       ort.env.wasm.wasmPaths = { mjs: m.base + 'vendor/ort-wasm-simd-threaded.asyncify.js', wasm: m.base + 'vendor/ort-wasm-simd-threaded.asyncify.wasm' };
       ort.env.wasm.numThreads = self.crossOriginIsolated ? 2 : 1;
       if (m.wasmBinary) ort.env.wasm.wasmBinary = m.wasmBinary; // reuse the runtime the page already downloaded
-      const bytes = await getModel(m.base + 'models/dmcount_qnrf_w8.onnx');
+      // The page downloads dmcount only after the user turns dense mode on, then hands the bytes over.
+      let bytes = m.modelBytes ? (m.modelBytes instanceof Uint8Array ? m.modelBytes : new Uint8Array(m.modelBytes)) : null;
+      if (!bytes) bytes = await getModel(m.base + 'models/dmcount_qnrf_w8.onnx');
+      if (bytes.length !== 21560628) throw new Error(`models/dmcount_qnrf_w8.onnx is incomplete (${bytes.length} of 21560628 bytes) — re-copy part 2`);
       let lastErr = null;
       for (const cand of (m.eps || ['webgpu', 'wasm'])) {
         if (cand === 'webgpu' && !(self.navigator && navigator.gpu)) continue;
