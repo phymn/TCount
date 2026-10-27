@@ -8,7 +8,17 @@
 (() => {
 const $ = id => document.getElementById(id);
 const Q = new URLSearchParams(location.search);
-const VERSION = 'crowd-1.1';
+const VERSION = 'crowd-1.2';
+const CACHE_NAME = 'tcount-' + VERSION; // keep in sync with crowd/sw.js
+const CHANGE_EN = 'Runtime and models stay on this device after the first launch. The dense model downloads only when dense mode is on.';
+const CHANGE_ES = 'El runtime y los modelos quedan en el dispositivo tras el primer arranque. El modelo denso se descarga solo al activar el modo denso.';
+// The two release-sized files normally live at crowd/vendor/ and crowd/models/ (see tools/fetch_assets.sh).
+// ?assetBase= is a CORS-enabled directory that serves those file names flat, for a future host of the
+// GitHub release assets. GitHub itself does not send CORS headers, so the browser cannot fetch the
+// release URL directly; curl (fetch_assets.sh) can. Example:
+//   ?assetBase=https://cdn.example/tcount/v1.0
+const ASSET_BASE = (Q.get('assetBase') || '').replace(/\/$/, '');
+const RELEASE_FILES = new Set(['ort-wasm-simd-threaded.asyncify.wasm', 'dmcount_qnrf_w8.onnx']);
 const now = () => performance.now();
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const abs = p => new URL(p, location.href).href;
@@ -20,6 +30,13 @@ let S = Object.assign({}, DEFAULTS);
 try { const o = JSON.parse(localStorage.getItem('tcrowd-settings') || '{}'); if (!o.v || o.v < 2) delete o.confirm; delete o.v; Object.assign(S, o); } catch (e) {} // v2: new default confirm=2
 for (const k of Object.keys(DEFAULTS)) if (Q.has(k)) S[k] = typeof DEFAULTS[k] === 'number' ? +Q.get(k) : Q.get(k);
 const saveSettings = () => { try { localStorage.setItem('tcrowd-settings', JSON.stringify(S)); } catch (e) {} };
+function syncThreadsCookie() {
+  // The service worker reads this on each fetch. Path covers /crowd/ wherever the folder is mounted.
+  const path = location.pathname.replace(/[^/]+$/, '') || '/';
+  if (S.threads === 'on') document.cookie = `tc-threads=on; Path=${path}; SameSite=Lax; Max-Age=31536000`;
+  else document.cookie = `tc-threads=; Path=${path}; SameSite=Lax; Max-Age=0`;
+}
+syncThreadsCookie();
 
 const CFG = {
   trackHigh: 0.45, trackLow: 0.1, newTrack: 0.5, matchThresh: 0.8, lostSeconds: 3.0,
@@ -61,16 +78,88 @@ const ASSETS = [
 ];
 const expectedSize = rel => { const a = ASSETS.find(x => x[0] === rel); return a ? a[1] : 0; };
 const MB = n => (n / 1048576).toFixed(1) + ' MB';
-// Fetch a file as bytes with progress and a precise error (URL, HTTP status, content-type, size).
-async function fetchAsset(rel, onProgress, timeoutMs = 180000) {
-  const url = abs(rel), exp = expectedSize(rel), t0 = now();
+const loadDiag = []; // shown in Debug and in error banners
+const loadEvents = []; // { rel, source: 'cache'|'network', bytes, ms } for tests and the debug log
+function networkUrlFor(rel) {
+  const name = rel.split('/').pop();
+  if (ASSET_BASE && RELEASE_FILES.has(name)) return ASSET_BASE + '/' + name;
+  return abs(rel);
+}
+async function openAssetCache() {
+  if (!('caches' in window)) return null;
+  try { return await caches.open(CACHE_NAME); } catch (e) { return null; }
+}
+async function cacheGet(rel) {
+  const cache = await openAssetCache();
+  if (!cache) return null;
+  try {
+    const res = await cache.match(abs(rel), { ignoreSearch: true });
+    if (!res) return null;
+    return new Uint8Array(await res.arrayBuffer());
+  } catch (e) { return null; }
+}
+async function cachePut(rel, bytes) {
+  const cache = await openAssetCache();
+  if (!cache) return;
+  try {
+    // Copy into the cache so ORT can keep using `bytes` (and so a detached buffer cannot wipe the cache).
+    const headers = new Headers({
+      'Content-Type': 'application/octet-stream',
+      'Content-Length': String(bytes.byteLength),
+      'X-TCount-Bytes': String(bytes.byteLength),
+      'X-TCount-Version': VERSION,
+    });
+    await cache.put(abs(rel), new Response(bytes.slice(), { status: 200, headers }));
+  } catch (e) { loadDiag.push('cache store failed for ' + rel + ': ' + (e.message || e)); }
+}
+async function cacheDelete(rel) {
+  const cache = await openAssetCache();
+  if (!cache) return;
+  try { await cache.delete(abs(rel), { ignoreSearch: true }); } catch (e) {}
+}
+async function purgeOldCaches() {
+  if (!('caches' in window)) return;
+  try {
+    const keys = await caches.keys();
+    await Promise.all(keys.filter(k => k.startsWith('tcount-crowd-') && k !== CACHE_NAME).map(k => caches.delete(k)));
+  } catch (e) {}
+}
+function noteLoad(rel, source, bytes, ms) {
+  loadEvents.push({ rel, source, bytes, ms });
+  loadDiag.push(`${rel}: ${MB(bytes)} from ${source} in ${(ms / 1000).toFixed(1)} s`);
+}
+const inflightAssets = new Map();
+// Device cache first (versioned Cache API), then the network. A size mismatch never stays cached.
+// `cache: 'no-store'` used to force a full refetch on every launch, including the 26 MB runtime.
+function fetchAsset(rel, onProgress, timeoutMs = 180000) {
+  const pending = inflightAssets.get(rel);
+  if (pending) return pending.then(buf => { if (onProgress) onProgress(buf.length, buf.length); return buf; });
+  const p = fetchAssetOnce(rel, onProgress, timeoutMs).finally(() => inflightAssets.delete(rel));
+  inflightAssets.set(rel, p);
+  return p;
+}
+async function fetchAssetOnce(rel, onProgress, timeoutMs) {
+  const exp = expectedSize(rel), t0 = now();
+  const cached = await cacheGet(rel);
+  if (cached && (!exp || cached.length === exp)) {
+    if (onProgress) onProgress(cached.length, cached.length);
+    noteLoad(rel, 'cache', cached.length, now() - t0);
+    return cached;
+  }
+  if (cached) await cacheDelete(rel);
+  const url = networkUrlFor(rel);
   const ctl = typeof AbortController !== 'undefined' ? new AbortController() : null;
   const timer = ctl && setTimeout(() => ctl.abort(), timeoutMs);
+  const cross = (() => { try { return new URL(url, location.href).origin !== location.origin; } catch (e) { return false; } })();
   let res;
-  try { res = await fetch(url, { cache: 'no-store', signal: ctl && ctl.signal }); }
-  catch (e) { clearTimeout(timer); throw new Error(`${rel}: request failed (${e.name === 'AbortError' ? 'timed out after ' + timeoutMs / 1000 + ' s' : e.message || e}) — is python3 -m http.server still running in iSH?`); }
+  try { res = await fetch(url, { cache: 'no-cache', mode: cross ? 'cors' : 'same-origin', signal: ctl && ctl.signal }); }
+  catch (e) {
+    clearTimeout(timer);
+    const why = e.name === 'AbortError' ? 'timed out after ' + timeoutMs / 1000 + ' s' : (e.message || e);
+    throw new Error(`${rel}: request failed (${why}) — ${cross ? 'check ?assetBase= (it must allow CORS) or run tools/fetch_assets.sh' : 'is python3 -m http.server still running in iSH? Files already cached are used automatically; this one is not on the device yet.'}`);
+  }
   const ct = res.headers.get('content-type') || '?';
-  if (!res.ok) { clearTimeout(timer); throw new Error(`${rel}: HTTP ${res.status} ${res.statusText || ''} (${url})${res.status === 404 ? (/dmcount/.test(rel) ? ' — part 2 zip not unzipped into crowd/models' : ' — file missing: copy/unzip the whole crowd folder (part 1) again') : ''}`); }
+  if (!res.ok) { clearTimeout(timer); throw new Error(`${rel}: HTTP ${res.status} ${res.statusText || ''} (${url})${res.status === 404 ? (/dmcount/.test(rel) ? ' — part 2 zip not unzipped into crowd/models (or not at assetBase)' : ' — file missing: copy/unzip the whole crowd folder (part 1) again') : ''}`); }
   if (/text\/html/.test(ct) && !/\.html$/.test(rel)) { clearTimeout(timer); throw new Error(`${rel}: server returned an HTML page instead of the file (${url})`); }
   let buf;
   try {
@@ -82,10 +171,10 @@ async function fetchAsset(rel, onProgress, timeoutMs = 180000) {
   } catch (e) { throw new Error(`${rel}: download interrupted after ${((now() - t0) / 1000).toFixed(0)} s (${e.name === 'AbortError' ? 'timed out' : e.message || e})`); }
   finally { clearTimeout(timer); }
   if (exp && buf.length !== exp) throw new Error(`${rel}: file is incomplete/corrupt — got ${buf.length} bytes, expected ${exp}. Re-copy/unzip it.`);
-  loadDiag.push(`${rel}: ${MB(buf.length)} in ${((now() - t0) / 1000).toFixed(1)} s, HTTP ${res.status}, ${ct}`);
+  await cachePut(rel, buf);
+  noteLoad(rel, 'network', buf.length, now() - t0);
   return buf;
 }
-const loadDiag = []; // shown in Debug and in error banners
 let ortReady = false, ortWasmBytes = null;
 function withTimeout(p, ms, what) { let t; return Promise.race([p, new Promise((_, rej) => { t = setTimeout(() => rej(new Error(what + ' timed out after ' + ms / 1000 + ' s')), ms); })]).finally(() => clearTimeout(t)); }
 async function setupOrt(onS) {
@@ -100,8 +189,9 @@ async function setupOrt(onS) {
   ort.env.logLevel = 'error';
   // Download the 26 MB runtime once ourselves: python http.server (iSH) often sends .wasm as application/octet-stream,
   // which makes Safari's streaming compile fail and re-download it; handing over the bytes avoids both problems.
+  // Repeat launches read those bytes from the versioned Cache API (see fetchAsset).
   try {
-    ortWasmBytes = await fetchAsset('vendor/ort-wasm-simd-threaded.asyncify.wasm', (n, t) => onS && onS(`Downloading AI runtime ${MB(n)}${t ? ' / ' + MB(t) : ''}…`));
+    if (!ortWasmBytes) ortWasmBytes = await fetchAsset('vendor/ort-wasm-simd-threaded.asyncify.wasm', (n, t) => onS && onS(`${t && n === t ? 'AI runtime on this device' : 'Downloading AI runtime'} ${MB(n)}${t ? ' / ' + MB(t) : ''}…`));
     ort.env.wasm.wasmBinary = ortWasmBytes;
   } catch (e) { loadDiag.push('runtime prefetch failed: ' + e.message); throw e; }
   ortReady = true; return true;
@@ -250,10 +340,11 @@ class CocoSsdDetector {
 // ------------------------------------------------------------------ Re-ID (OSNet x0.5)
 class ReID {
   constructor() { this.session = null; this.ok = false; this.lastMs = 0; this.name = 'OSNet-x0.5'; }
-  async load(ep) {
+  async load(ep, onS) {
     const url = abs('models/osnet_x0_5_reid_w8.onnx');
-    try { this.session = await makeSession(url, ep, status); this.ep = ep; await this.embed([[0, 0, 8, 16]]); }
-    catch (e) { if (ep === 'wasm') throw e; logErr('reid-' + ep, e); this.session = await makeSession(url, 'wasm', status); this.ep = 'wasm'; await this.embed([[0, 0, 8, 16]]); }
+    const say = onS || status;
+    try { this.session = await makeSession(url, ep, say); this.ep = ep; await this.embed([[0, 0, 8, 16]]); }
+    catch (e) { if (ep === 'wasm') throw e; logErr('reid-' + ep, e); this.session = await makeSession(url, 'wasm', say); this.ep = 'wasm'; await this.embed([[0, 0, 8, 16]]); }
     this.ok = true; return this;
   }
   async embed(boxes) { // boxes in frameCanvas coords -> L2-normalized Float32Array[512]
@@ -584,31 +675,55 @@ async function toggleTorch() {
 }
 
 // ------------------------------------------------------------------ dense crowd estimator (DM-Count in a worker; tiled-detection fallback)
-const dense = { worker: null, ready: false, failed: false, busy: false, est: null, estAt: 0, map: null, mapW: 0, mapH: 0, source: '', ms: 0, peak: 0, active: false, autoSince: 0, err: '', reqAt: 0 };
+const dense = { worker: null, ready: false, failed: false, busy: false, est: null, estAt: 0, map: null, mapW: 0, mapH: 0, source: '', ms: 0, peak: 0, active: false, autoSince: 0, err: '', reqAt: 0, modelRequested: false, modelPromise: null, modelBytes: null, starting: false };
+// The 21 MB DM-Count file is fetched only after the user sets Dense crowd mode to On.
+function ensureDenseModel() {
+  if (S.dense !== 'on') return null;
+  if (dense.modelPromise) return dense.modelPromise;
+  dense.modelRequested = true;
+  if (window.__tc) window.__tc.denseModelRequested = true;
+  dense.modelPromise = fetchAsset('models/dmcount_qnrf_w8.onnx', (n, t) => {
+    if (!running) status(`Downloading dense model ${MB(n)}${t ? ' / ' + MB(t) : ''}…`, 'running');
+  }).then(b => { dense.modelBytes = b; return b; }).catch(e => {
+    dense.modelPromise = null; dense.failed = true; dense.err = errText(e);
+    banner('dense', 'Density model failed (' + dense.err + ') — using a tiled-detection estimate instead.', 'warn');
+    throw e;
+  });
+  return dense.modelPromise;
+}
 function startDenseWorker() {
-  if (dense.worker || dense.failed) return;
+  if (S.dense !== 'on') return;
+  if (dense.worker || dense.failed || dense.starting) return;
   // memory: only start the 2nd runtime once the main models are up and the session has been running a while (iPhone)
   if (!detector || !running || now() - (st.runStart || 0) < (Q.get('denseNow') ? 0 : 8000) || typeof ort === 'undefined') return;
-  try {
-    dense.worker = new Worker('dense-worker.js'); dense.startAt = now();
-    dense.worker.onmessage = e => {
-      const m = e.data;
-      if (m.type === 'ready') { dense.ready = true; dense.ep = m.ep; }
-      else if (m.type === 'error') { dense.busy = false; dense.failed = true; dense.err = m.error; banner('dense', 'Density model failed (' + m.error + ') — using a tiled-detection estimate instead.', 'warn'); }
-      else if (m.type === 'result') { dense.busy = false; dense.est = m.count; dense.estAt = now(); dense.map = m.map; dense.mapW = m.w; dense.mapH = m.h; dense.ms = m.ms; dense.source = 'density'; dense.peak = Math.max(dense.peak, m.count); }
-    };
-    dense.worker.onerror = e => { dense.failed = true; dense.err = e.message || 'worker error'; banner('dense', 'Density worker could not start — using a tiled-detection estimate.', 'warn'); };
-    dense.worker.postMessage({ type: 'init', base: abs('./'), maxPages: globalThis.__ortMaxPages, wasmBinary: ortWasmBytes || undefined, eps: dense.eps || (Q.get('denseEp') ? [Q.get('denseEp')] : ['webgpu', 'wasm']) });
-  } catch (e) { dense.failed = true; dense.err = e.message; }
+  const pending = ensureDenseModel();
+  if (!pending) return;
+  dense.starting = true;
+  pending.then(bytes => {
+    dense.starting = false;
+    if (S.dense !== 'on' || dense.worker || dense.failed) return;
+    try {
+      dense.worker = new Worker('dense-worker.js'); dense.startAt = now();
+      dense.worker.onmessage = e => {
+        const m = e.data;
+        if (m.type === 'ready') { dense.ready = true; dense.ep = m.ep; }
+        else if (m.type === 'error') { dense.busy = false; dense.failed = true; dense.err = m.error; banner('dense', 'Density model failed (' + m.error + ') — using a tiled-detection estimate instead.', 'warn'); }
+        else if (m.type === 'result') { dense.busy = false; dense.est = m.count; dense.estAt = now(); dense.map = m.map; dense.mapW = m.w; dense.mapH = m.h; dense.ms = m.ms; dense.source = 'density'; dense.peak = Math.max(dense.peak, m.count); }
+      };
+      dense.worker.onerror = ev => { dense.failed = true; dense.err = ev.message || 'worker error'; banner('dense', 'Density worker could not start — using a tiled-detection estimate.', 'warn'); };
+      const copy = bytes.slice();
+      dense.worker.postMessage({ type: 'init', base: abs('./'), maxPages: globalThis.__ortMaxPages, modelBytes: copy.buffer, wasmBinary: ortWasmBytes || undefined, eps: dense.eps || (Q.get('denseEp') ? [Q.get('denseEp')] : ['webgpu', 'wasm']) }, [copy.buffer]);
+    } catch (e) { dense.failed = true; dense.err = e.message; }
+  }).catch(() => { dense.starting = false; });
 }
 function requestDense() {
   if (dense.busy && now() - dense.reqAt > 15000) { // stuck (e.g. a very slow GPU): restart the worker on the CPU
     try { dense.worker.terminate(); } catch (e) {}
-    dense.worker = null; dense.ready = false; dense.busy = false; dense.eps = ['wasm']; startDenseWorker(); return false;
+    dense.worker = null; dense.ready = false; dense.busy = false; dense.starting = false; dense.eps = ['wasm']; startDenseWorker(); return false;
   }
   if (!dense.ready && dense.worker && now() - dense.startAt > 20000 && (dense.eps || ['webgpu'])[0] === 'webgpu') { // GPU init too slow
     try { dense.worker.terminate(); } catch (e) {}
-    dense.worker = null; dense.eps = ['wasm']; startDenseWorker(); return false;
+    dense.worker = null; dense.starting = false; dense.eps = ['wasm']; startDenseWorker(); return false;
   }
   if (!dense.worker || !dense.ready || dense.busy) return false;
   const W = dense.ms > 3500 ? 384 : 512, H = Math.max(32, Math.round(frameCanvas.height * W / frameCanvas.width / 32) * 32); // slower devices: smaller input
@@ -636,6 +751,22 @@ function markLensChange(why) {
   ledger.events.push({ t: Date.now(), type: 'lens', why });
 }
 
+let reidLoading = null;
+function loadReid(ep) {
+  if (reid || reidLoading) return reidLoading;
+  reidLoading = (async () => {
+    try {
+      const r = await new ReID().load(ep, () => {});
+      reid = r;
+      modelBytes.delete('models/osnet_x0_5_reid_w8.onnx');
+      banner('reid');
+    } catch (e) {
+      logErr('reid', e); reid = null; loadDiag.push('re-ID failed: ' + errText(e));
+      banner('reid', 'Re-ID model failed to load — people who leave and come back may be counted again. (' + errText(e) + ')', 'warn');
+    }
+  })();
+  return reidLoading;
+}
 async function loadModels() {
   const want = S.model, key = want + '|' + S.backend;
   if (detector && loadedKey === key) return;
@@ -669,10 +800,9 @@ async function loadModels() {
     catch (e) { banner('model2', 'coco-ssd fallback also failed: ' + (e.message || e)); throw new Error('No detector could be loaded'); }
   }
   if (detector instanceof YoloxDetector) {
-    try { onS('Loading re-ID model…'); reid = await new ReID().load(detector.ep); banner('reid'); }
-    catch (e) { logErr('reid', e); reid = null; loadDiag.push('re-ID failed: ' + errText(e)); banner('reid', 'Re-ID model failed to load — people who leave and come back may be counted again. (' + errText(e) + ')', 'warn'); }
-    for (const k of [...modelBytes.keys()]) modelBytes.delete(k); // sessions own their copies now
+    modelBytes.delete(`models/yolox_${detector.kind}_person_w8.onnx`); // the session owns its copy; the Cache API keeps the file
     if (!detector.webgpuAvailable) banner('gpu', 'WebGPU is not available here — running on the CPU (WASM). Safari 26 / iOS 26 enables WebGPU.', 'info');
+    loadReid(detector.ep); // do not block the first count on the re-ID session
   } else banner('reid', 'Re-ID is unavailable with the coco-ssd fallback — people who leave and return may be recounted.', 'warn');
   st.size = S.size === 'auto' ? (detector.ep === 'webgpu' ? 640 : 512) : +S.size;
   loadedKey = key;
@@ -927,22 +1057,20 @@ function autoPolicies(hd, W, H, nAll) {
     else if (hd.length >= 1 && hd.length <= 2 && medH < 0.06 && st.smallSince && tNow - st.smallSince > 5000 && tele && cam.lensKind !== 'tele') { st.ladder = 'single distant target → telephoto'; switchLens(tele.label); }
     else if (cam.lensKind === 'tele' && (hd.length > 3 || (st.noDetSince && tNow - st.noDetSince > 4000)) && (wide || uw)) { st.ladder = 'telephoto lost coverage → wide'; switchLens((wide || uw).label); }
   }
-  if (S.dense === 'on') dense.active = true;
-  else if (S.dense === 'off') dense.active = false;
+  if (S.dense === 'off') dense.active = false;
+  else if (S.dense === 'on') dense.active = true;
   else {
-    // switch on when detections are many/overlapping, or when a periodic density probe sees far more people than the detector
+    // Auto estimates a crowded scene from the detector only. It does not download DM-Count.
     const crowded = hd.length >= 25 || (hd.length >= 10 && st.crowdedness > 0.35);
-    const probeSaysDense = dense.est != null && tNow - dense.estAt < 8000 && dense.source === 'density' && dense.est > Math.max(25, 1.8 * hd.length + 5);
-    if (crowded || probeSaysDense) { if (!dense.active) ledger.events.push({ t: Date.now(), type: 'dense-on', why: crowded ? 'many/overlapping detections' : 'density probe ' + Math.round(dense.est) }); dense.active = true; dense.autoSince = tNow; }
+    if (crowded) { if (!dense.active) ledger.events.push({ t: Date.now(), type: 'dense-on', why: 'many/overlapping detections' }); dense.active = true; dense.autoSince = tNow; }
     else if (dense.active && tNow - dense.autoSince > 6000) dense.active = false;
-    const probeWanted = hd.length >= 8 || st.tiles || nAll >= 15; // many weak boxes = typical of a dense crowd
-    if (!dense.active && probeWanted && !dense.failed && (tNow - dense.reqAt > 6000 || dense.busy)) { startDenseWorker(); requestDense(); }
   }
-  if (dense.active) {
+  if (S.dense === 'on') {
+    ensureDenseModel();
     startDenseWorker();
     if (!dense.failed && (tNow - dense.reqAt > 1500 || dense.busy)) requestDense();
-    if (dense.failed && tNow - st.tiledEstAt > 3000) tiledEstimate();
-  }
+    else if (dense.failed && tNow - st.tiledEstAt > 3000) tiledEstimate();
+  } else if (dense.active && tNow - st.tiledEstAt > 3000) tiledEstimate();
 }
 async function tiledEstimate() { // documented fallback when the density model is unavailable: full frame + 3x3 tiles, NMS-merged
   st.tiledEstAt = now();
@@ -1001,7 +1129,8 @@ function uiTick() {
   if (dense.active) { $('crowd').textContent = dense.est == null ? '…' : (dense.source === 'density' ? '≈' + Math.round(dense.est) : '≥' + dense.est); $('crowd-sub').textContent = dense.source === 'density' ? 'visible now, ±25%' : 'tiled detections'; }
   if (detector) chip('chip-backend', `${detector.name} · ${detector.ep}${detector.lastIn ? ' · ' + detector.lastIn : ''}${st.tiles ? ' +tiles' : ''}`, detector.ep === 'webgpu' ? 'on' : detector.ep === 'wasm' ? '' : 'warn');
   chip('chip-lens', `lens: ${cam.lensKind}${cam.digitalZoom > 1 ? ' · ' + cam.digitalZoom.toFixed(1) + '× dig' : ''}${S.lensMode === 'auto' ? ' (auto)' : ''}`, now() < st.pauseUntil ? 'warn' : '');
-  chip('chip-dense', `dense: ${dense.active ? (dense.failed ? 'tiled' : 'on') : 'off'}`, dense.active ? 'warn' : '');
+  const denseTxt = S.dense === 'on' ? (dense.failed ? 'tiled' : dense.ready ? 'on' : 'loading') : (dense.active ? 'tiled' : 'off');
+  chip('chip-dense', 'dense: ' + denseTxt, denseTxt === 'off' ? '' : 'warn');
   chip('chip-light', st.lumaEma < 0 ? 'light: —' : `light: ${st.light === 'ok' ? 'ok' : st.light === 'dark' ? 'dark' : 'very dark'} (${st.lumaEma.toFixed(0)})`, st.light === 'ok' ? '' : 'bad');
   chip('chip-fps', `${st.fps.toFixed(1)} fps`, st.fps > 8 ? 'on' : st.fps > 3 ? '' : 'warn');
   if (running) {
@@ -1093,10 +1222,11 @@ function startLoop() { loopGen++; const g = loopGen; loop(g); if (!rafId) render
 $('startBtn').onclick = async () => {
   $('startBtn').disabled = true; status('Starting…', 'running');
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { status('Camera API unavailable (needs 127.0.0.1 or https)', 'error'); $('startBtn').disabled = false; return; }
+  const modelsP = loadModels(); // overlap the runtime download with opening the camera
   try { await openCamera({ label: S.lensMode === 'manual' ? S.lens : '' }); }
-  catch (e) { status('Camera error: ' + (e.message || e.name), 'error'); banner('cam', 'Camera error: ' + (e.message || e.name) + '. Allow camera access for this site in Safari.'); $('startBtn').disabled = false; return; }
+  catch (e) { status('Camera error: ' + (e.message || e.name), 'error'); banner('cam', 'Camera error: ' + (e.message || e.name) + '. Allow camera access for this site in Safari.'); $('startBtn').disabled = false; modelsP.catch(() => {}); return; }
   await enumerateCams(); // labels only appear after permission
-  try { await loadModels(); } catch (e) { status('Model load failed: ' + (e.message || e), 'error'); $('startBtn').disabled = false; return; }
+  try { await modelsP; } catch (e) { status('Model load failed: ' + (e.message || e), 'error'); $('startBtn').disabled = false; return; }
   tracker.reset(); motion.reset(); st.csv = []; st.lastLensSwitch = now(); st.lumaEma = -1; st.runStart = now(); st.camStart = now(); st.light = 'ok'; st.lightPendSince = 0; st.blackRun = 0;
   running = true;
   $('stopBtn').disabled = false; $('switchBtn').disabled = false; $('startBtn').textContent = 'Running…';
@@ -1162,15 +1292,37 @@ async function selfTest() {
     line('');
     line('files (HTTP status · size · expected · content-type · time):');
     let bad = 0;
+    let cacheNames = [];
+    try { cacheNames = await caches.keys(); } catch (e) {}
+    line(`device cache: ${cacheNames.filter(k => k.startsWith('tcount-')).join(', ') || 'none'}`);
     for (const [rel, exp, req] of ASSETS) {
       const t0 = now();
       try {
-        const r = await fetch(abs(rel), { cache: 'no-store' }); const ct = r.headers.get('content-type') || '?';
+        if (!req && /dmcount/.test(rel)) {
+          const cached = await cacheGet(rel);
+          if (cached && (!exp || cached.length === exp)) { line(`✓ ${rel}: on this device · ${MB(cached.length)} · not re-downloaded`); continue; }
+          const r = await fetch(networkUrlFor(rel), { method: 'HEAD', cache: 'no-store' });
+          const n = +(r.headers.get('content-length') || 0);
+          const okSize = !exp || !n || n === exp;
+          line(`${r.ok && okSize ? '!' : '!'} ${rel}: HTTP ${r.status} · ${n ? MB(n) : 'size unknown'} · not downloaded (dense mode is off — turn it on to fetch this model)${r.ok ? '' : ' (optional)'}`);
+          continue;
+        }
+        const cached = await cacheGet(rel);
+        if (cached && (!exp || cached.length === exp)) {
+          line(`✓ ${rel}: device cache · ${MB(cached.length)} · ${((now() - t0) / 1000).toFixed(1)} s`);
+          continue;
+        }
+        const r = await fetch(networkUrlFor(rel), { cache: 'no-store' }); const ct = r.headers.get('content-type') || '?';
         let n = 0; if (r.body && r.body.getReader) { const rd = r.body.getReader(); for (;;) { const { done, value } = await rd.read(); if (done) break; n += value.length; } } else n = (await r.arrayBuffer()).byteLength;
         const okSize = !exp || n === exp, ok = r.ok && okSize;
         if (!ok && req) bad++;
         line(`${ok ? '✓' : req ? '✗' : '!'} ${rel}: HTTP ${r.status} · ${MB(n)}${exp ? (okSize ? '' : ` · EXPECTED ${MB(exp)} (incomplete)`) : ''} · ${ct} · ${((now() - t0) / 1000).toFixed(1)} s${!r.ok && !req ? ' (optional: dense model from part 2)' : ''}`);
-      } catch (e) { if (req) bad++; line(`✗ ${rel}: request failed — ${errText(e)}`); }
+      } catch (e) {
+        const cached = await cacheGet(rel);
+        if (cached && (!exp || cached.length === exp)) { line(`✓ ${rel}: device cache · ${MB(cached.length)} (server unreachable)`); continue; }
+        if (req) bad++;
+        line(`${req ? '✗' : '!'} ${rel}: request failed — ${errText(e)}`);
+      }
     }
     line('');
     if (typeof ort !== 'undefined' && !bad) {
@@ -1196,29 +1348,48 @@ bind('setLensMode', 'lensMode'); bind('setCmc', 'cmc'); bind('setHigh', 'high', 
 $('setLens').onchange = () => { S.lens = $('setLens').value; S.lensMode = 'manual'; $('setLensMode').value = 'manual'; saveSettings(); if (running) switchLens(S.lens); };
 function onSetting(key) {
   if (key === 'size' && S.size !== 'auto') st.size = +S.size;
-  if (key === 'threads') setupThreads(true);
+  if (key === 'threads') { syncThreadsCookie(); setupThreads(true); }
+  if (key === 'dense' && S.dense === 'on') ensureDenseModel();
 }
-// optional: cross-origin isolation through a tiny service worker -> multi-threaded WASM (python http.server cannot send COOP/COEP)
+// The service worker always stays registered: it is the offline cache. COOP/COEP are added only
+// while Multi-thread CPU is on (tc-threads cookie). Unregistering it would drop the cached models.
 async function setupThreads(userChanged) {
-  if (!('serviceWorker' in navigator)) { if (S.threads === 'on') banner('thr', 'Service workers unavailable — multi-thread CPU mode not possible here.', 'warn'); return; }
+  if (!('serviceWorker' in navigator)) { if (S.threads === 'on') banner('thr', 'Service workers unavailable — multi-thread CPU mode not possible here. Models will not stay cached for offline launch.', 'warn'); return; }
   try {
+    syncThreadsCookie();
+    await navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' });
     if (S.threads === 'on') {
-      await navigator.serviceWorker.register('sw.js');
       if (!window.crossOriginIsolated) {
         await navigator.serviceWorker.ready;
         if (userChanged || !sessionStorage.getItem('coi-reloaded')) { sessionStorage.setItem('coi-reloaded', '1'); location.reload(); }
         else banner('thr', 'Multi-thread mode is on, but this browser did not enable cross-origin isolation — staying single-threaded.', 'warn');
       }
-    } else {
-      const regs = await navigator.serviceWorker.getRegistrations();
-      for (const r of regs) await r.unregister();
-      if (window.crossOriginIsolated && userChanged) location.reload();
-    }
-  } catch (e) { banner('thr', 'Multi-thread setup failed: ' + (e.message || e), 'warn'); }
+    } else if (window.crossOriginIsolated && userChanged) location.reload();
+  } catch (e) { banner('thr', 'Offline cache setup failed: ' + (e.message || e), 'warn'); }
+}
+function prefetchAssets() {
+  if (location.protocol === 'file:') return;
+  purgeOldCaches();
+  if (S.model !== 'cocossd') {
+    fetchAsset('vendor/ort-wasm-simd-threaded.asyncify.wasm').then(b => { ortWasmBytes = ortWasmBytes || b; }).catch(e => loadDiag.push('prefetch runtime: ' + errText(e)));
+    const kind = (S.model === 'nano' || S.model === 'tiny') ? S.model : 'tiny';
+    const rel = `models/yolox_${kind}_person_w8.onnx`;
+    fetchAsset(rel).then(b => { if (!modelBytes.has(rel)) modelBytes.set(rel, b); }).catch(e => loadDiag.push('prefetch ' + rel + ': ' + errText(e)));
+    const reidRel = 'models/osnet_x0_5_reid_w8.onnx';
+    fetchAsset(reidRel).then(b => { if (!modelBytes.has(reidRel)) modelBytes.set(reidRel, b); }).catch(e => loadDiag.push('prefetch re-ID: ' + errText(e)));
+  }
+  if (S.dense === 'on') { const p = ensureDenseModel(); if (p) p.catch(() => {}); }
 }
 setupThreads(false);
+window.__tc.loadEvents = loadEvents;
+window.__tc.version = VERSION;
+window.__tc.cacheName = CACHE_NAME;
+window.__tc.denseModelRequested = false;
 window.addEventListener('error', e => logErr('Error', e.error || e.message));
 window.addEventListener('unhandledrejection', e => logErr('Promise', e.reason));
 if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) status('Camera not available here (needs 127.0.0.1 or https)', 'error');
+const footer = $('buildFooter');
+if (footer) footer.textContent = `${VERSION}\n${CHANGE_EN}\n${CHANGE_ES}`;
 uiTick();
+prefetchAssets();
 })();

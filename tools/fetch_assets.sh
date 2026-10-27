@@ -1,6 +1,9 @@
 #!/bin/sh
 # Downloads the two large files that are not stored in git into crowd/.
 # Run from the repo root (works in iSH: apk add curl). Verifies sizes.
+# The page loads these paths by default. A browser can instead use
+# ?assetBase=<CORS-enabled directory> with the same flat file names.
+# The GitHub release URL below is for curl; GitHub does not send CORS headers.
 set -e
 REL=${REL:-https://github.com/phymn/TCount/releases/download/v1.0}
 ORT=https://cdn.jsdelivr.net/npm/onnxruntime-web@1.30.0/dist/ort-wasm-simd-threaded.asyncify.wasm

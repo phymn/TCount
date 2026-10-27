@@ -25,7 +25,9 @@ appearance check (too small/occluded), grey dashed = not yet confirmed.
 Settings (⚙): detector (Auto/Tiny/Nano/coco-ssd), backend, input size, small-people tiling,
 dense mode (Auto/On/Off), lens policy (Auto ladder/Manual + lens list), camera-motion
 compensation, same-person / new-person thresholds (default 0.80 / 0.65), confirm frames,
-experimental multi-thread CPU mode (service worker adds COOP/COEP, page reloads once).
+experimental multi-thread CPU mode (the same service worker adds COOP/COEP, page reloads once).
+
+The service worker is always on. It caches the app, the models and the AI runtime on the device (cache name tcount-crowd-1.2) so the next launch is fast and works offline. A new version replaces that cache. Dense mode On is the only control that downloads the 21 MB density model; Auto uses the detector's tiled estimate instead. Large files can be loaded from ?assetBase=https://host/dir (CORS required; see the repo README).
 
 Auto policies
   - No people / small people  -> tiled inference on the same frame (no lens change)
