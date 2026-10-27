@@ -1,14 +1,8 @@
 /* Dense-crowd density estimation (DM-Count, MIT) in a worker so the camera loop never freezes.
-   Output: density map whose sum = estimated number of visible people. No identities, no images kept. */
+   Output: density map whose sum = estimated number of visible people. No identities, no images kept.
+   The page passes the model bytes. This worker does not fetch dmcount_qnrf_w8.onnx itself, so the
+   21 MB file is downloaded only when the user turns dense mode on (and then only from the device cache). */
 let session = null, ep = 'wasm';
-async function getModel(url) {
-  let res;
-  try { res = await fetch(url, { cache: 'no-store' }); } catch (e) { throw new Error('density model request failed: ' + (e.message || e)); }
-  if (!res.ok) throw new Error(`models/dmcount_qnrf_w8.onnx: HTTP ${res.status}${res.status === 404 ? ' — part 2 zip not unzipped into crowd/models' : ''}`);
-  const b = new Uint8Array(await res.arrayBuffer());
-  if (b.length !== 21560628) throw new Error(`models/dmcount_qnrf_w8.onnx is incomplete (${b.length} of 21560628 bytes) — re-copy part 2`);
-  return b;
-}
 self.onmessage = async (e) => {
   const m = e.data;
   try {
@@ -18,7 +12,9 @@ self.onmessage = async (e) => {
       ort.env.wasm.wasmPaths = { mjs: m.base + 'vendor/ort-wasm-simd-threaded.asyncify.js', wasm: m.base + 'vendor/ort-wasm-simd-threaded.asyncify.wasm' };
       ort.env.wasm.numThreads = self.crossOriginIsolated ? 2 : 1;
       if (m.wasmBinary) ort.env.wasm.wasmBinary = m.wasmBinary; // reuse the runtime the page already downloaded
-      const bytes = await getModel(m.base + 'models/dmcount_qnrf_w8.onnx');
+      if (!m.modelBytes) throw new Error('models/dmcount_qnrf_w8.onnx was not provided — turn Dense crowd mode on');
+      const bytes = new Uint8Array(m.modelBytes);
+      if (bytes.length !== 21560628) throw new Error(`models/dmcount_qnrf_w8.onnx is incomplete (${bytes.length} of 21560628 bytes) — re-copy part 2`);
       let lastErr = null;
       for (const cand of (m.eps || ['webgpu', 'wasm'])) {
         if (cand === 'webgpu' && !(self.navigator && navigator.gpu)) continue;

@@ -36,6 +36,12 @@ Counts people with a phone camera, running entirely in the browser (iPhone Safar
 
 The small models (`yolox_nano` 1.1 MB, `yolox_tiny` 5.2 MB, `osnet_x0_5` 0.9 MB) are committed. Git LFS would work too, but Release assets are simpler for iSH users.
 
+After the first successful load, `crowd/sw.js` stores the app, the models and the wasm in a versioned Cache API (`tcount-crowd-1.2`). The next launch, including an offline one, reads them from the device. Shipping a new app or model version means bumping `VERSION` in `crowd/app.js` and the matching cache name in `crowd/sw.js`; the new service worker deletes older `tcount-crowd-*` caches. A cached file whose size doesn't match the table above is thrown away and fetched again.
+
+The browser loads those two large files from `crowd/vendor/` and `crowd/models/`. To point the wasm and `dmcount_qnrf_w8.onnx` at a CORS-enabled directory instead (flat file names, as in a future release host), open `?assetBase=https://cdn.example/tcount/v1.0`. `https://github.com/phymn/TCount/releases/download/v1.0` is the URL `tools/fetch_assets.sh` uses, but GitHub does not send CORS headers, so the page cannot fetch it directly.
+
+Dense crowd mode **On** is what downloads `dmcount_qnrf_w8.onnx`. Auto and Off do not.
+
 ## Repo layout
 - `crowd/`: the app (`index.html` UI, `app.js` pipeline, `dense-worker.js` density worker, `sw.js` optional COOP/COEP helper, `LICENSES.txt`, `README.txt` quick reference)
 - `docs/HOW-IT-WORKS.md`: full technical write-up

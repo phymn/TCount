@@ -16,9 +16,9 @@ This covers two apps: the original counters (`index.html`, `index-nogender.html`
 | File | Role |
 |---|---|
 | `crowd/index.html` | UI: video and overlay canvas, counter tiles (In Frame, Unique, Possible dupes, Est. crowd), Start/Stop & Total/Count Again, ⚙ Settings, 🐞 Debug, 🩺 Self-test, ⬇ CSV, 🔦 Torch, zoom slider, lens list, possible-duplicate review sheet. Loads `vendor/ort.webgpu.min.js`, then `app.js`. |
-| `crowd/app.js` | The whole pipeline (version `crowd-1.1`): asset loader, ORT setup, detectors, re-ID, Kalman/ByteTrack, motion estimator, ledger, camera/lens manager, light logic, identity decisions, auto policies, drawing, CSV, self-test, settings. |
+| `crowd/app.js` | The whole pipeline (version `crowd-1.2`): asset loader, ORT setup, detectors, re-ID, Kalman/ByteTrack, motion estimator, ledger, camera/lens manager, light logic, identity decisions, auto policies, drawing, CSV, self-test, settings. |
 | `crowd/dense-worker.js` | Web Worker running DM-Count on a second ORT runtime, so the camera loop never freezes. It returns a density map whose sum is the estimated count. |
-| `crowd/sw.js` | Optional service worker (Settings → Multi-thread CPU). It adds COOP/COEP/CORP headers to same-origin responses, which `python -m http.server` can't send, so threaded WASM becomes possible. Nothing is cached. |
+| `crowd/sw.js` | Service worker, always registered. It keeps a versioned Cache API (`tcount-` + the app version) of the app shell, the ONNX models and the ORT wasm, deletes older `tcount-crowd-*` caches on activate, and serves them when the network is gone. With Settings → Multi-thread CPU it also adds COOP/COEP/CORP, which `python -m http.server` can't send. |
 | `crowd/vendor/ort.webgpu.min.js` | ONNX Runtime Web 1.30.0 (WebGPU and WASM) |
 | `crowd/vendor/ort-wasm-simd-threaded.asyncify.{js,wasm}` | ORT WASM glue and binary. The glue was renamed from `.mjs` to `.js` so python http.server sends a JS MIME type, and its shared-memory maximum reads `globalThis.__ortMaxPages`. |
 | `crowd/models/yolox_{nano,tiny}_person_w8.onnx` | YOLOX person detectors: dynamic input size, output cut down to the person class, int8 weights (`DequantizeLinear`) with fp32 compute |
@@ -27,7 +27,7 @@ This covers two apps: the original counters (`index.html`, `index-nogender.html`
 
 ### B2. Startup and asset loading
 - **Environment checks**: `file:` → a banner explains that the folder has to be served. Not secure and not `127.0.0.1` → a "camera blocked" banner. ORT script missing → it warns and tries the coco-ssd CDN fallback.
-- **`fetchAsset(rel)`**: fetch with a progress display and a 180 s timeout. It checks the HTTP status, catches HTML error pages, and compares the size against the `ASSETS` table of expected byte counts. That separates "missing", "incomplete copy" and "server error" cases, and gives the iSH user an exact message ("part 2 zip not unzipped…").
+- **`fetchAsset(rel)`**: device cache first (Cache API, version `tcount-crowd-1.2`), then the network, with a progress display and a 180 s timeout. A cached copy whose size doesn't match the `ASSETS` table is discarded and fetched again. It checks the HTTP status, catches HTML error pages, and compares the size against that table. That separates "missing", "incomplete copy" and "server error" cases, and gives the iSH user an exact message ("part 2 zip not unzipped…"). Repeat launches and offline launches read the bytes from the device. The two large files can instead be loaded from `?assetBase=` (a CORS-enabled directory of flat file names). GitHub release URLs are not CORS-enabled, so `tools/fetch_assets.sh` remains the way to place them on disk. The page starts fetching the runtime and the detector as soon as it opens, and the counting loop no longer waits for the re-ID model.
 - **`setupOrt()`**: sets `__ortMaxPages = 1024 MB × 16` pages. iOS Safari can refuse the default 4 GB shared-memory reservation, and 1 GB is plenty. Override it with `?maxmem=`. `numThreads` is 1 unless the page is `crossOriginIsolated`. The 26 MB `.wasm` is **downloaded by the app itself** and passed in as `wasmBinary`. iSH serves `.wasm` as `application/octet-stream`, which breaks Safari's streaming compile and triggers a slow second download.
 - **`makeSession()`**: one cached byte buffer per model, `graphOptimizationLevel:'all'`, timeouts of 45 s (WebGPU) and 120 s (WASM). Models load **one at a time** to keep memory use low.
 - **`YoloxDetector.load()`**: tries WebGPU when it's available, then warms up at 320×320 (shader compile) and benchmarks 2 runs. WASM is only also tried if WebGPU failed or took more than 45 ms. The faster one wins and the other session is released. Settings: Auto, Tiny, Nano, or coco-ssd. Auto picks Tiny or Nano based on speed.
@@ -74,8 +74,8 @@ The tracker's IDs are short-lived. The **Ledger** holds permanent **personIds** 
 - The zoom slider uses native `zoom` constraints when Safari really applies them (this is checked), and otherwise a digital crop zoom.
 
 ### B8. Dense mode (`dense-worker.js`, `requestDense`, `tiledEstimate`)
-- It switches on (Auto) when there are ≥ 25 high detections, or ≥ 10 with crowdedness > 0.35 (overlapping pairs), or when a periodic density check sees more than max(25, 1.8·dets + 5). It switches off after 6 s without those signals.
-- The worker starts only 8 s after the main models are running (iPhone memory) and reuses the page's WASM bytes. It tries WebGPU first, falling back to WASM if setup takes more than 20 s or a run takes more than 15 s. Input is 512 px wide (384 when slow), ImageNet normalisation. The density map is summed to give the count, and is drawn as a heat overlay.
+- Auto switches the *tiled* estimate on when there are ≥ 25 high detections, or ≥ 10 with crowdedness > 0.35 (overlapping pairs), and switches it off after 6 s without those signals. Auto does **not** download DM-Count. That 21 MB file is fetched only when Dense crowd mode is set to On (including `?dense=on`), then kept in the device cache.
+- The worker starts only once that model is on the device, and only 8 s after the main models are running (iPhone memory; `?denseNow` skips the wait). It reuses the page's WASM bytes. It tries WebGPU first, falling back to WASM if setup takes more than 20 s or a run takes more than 15 s. Input is 512 px wide (384 when slow), ImageNet normalisation. The density map is summed to give the count, and is drawn as a heat overlay.
 - Fallback when the model is missing: full frame + 3×3 tiles at 416, score > 0.35, labelled "tiled detection (lower bound)".
 - **Est. crowd is never added to Unique.** It's a separate, identity-free number.
 
@@ -110,4 +110,4 @@ The tracker's IDs are short-lived. The **Ledger** holds permanent **personIds** 
 - Re-ID depends on clothing. Identical outfits can merge people, and coats on or off can split one person.
 - Brief jumps in the Unique count after crossings, which settle within about 1 s.
 - Real-device tuning: iPhone WebGPU speed, memory with dense mode on, and lens labels on different iOS versions.
-- Possible additions: a better re-ID model (OSNet-AIN or a CLIP-ReID distillation), a counting line or zone, a PWA offline cache, and exporting the ledger events.
+- Possible additions: a better re-ID model (OSNet-AIN or a CLIP-ReID distillation), a counting line or zone, and exporting the ledger events. The app shell and models are already kept in a versioned Cache API and work offline after the first successful load.
