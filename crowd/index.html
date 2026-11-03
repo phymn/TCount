@@ -45,7 +45,7 @@
     .blue { color: var(--blue); } .green { color: var(--accent); } .orange { color: var(--orange); }
     #stat-dupes { cursor: pointer; }
 
-    #big { position: absolute; bottom: 190px; left: 0; right: 0; text-align: center; z-index: 5; pointer-events: none; text-shadow: 0 2px 14px #000; }
+    #big { position: absolute; bottom: 214px; left: 0; right: 0; text-align: center; z-index: 5; pointer-events: none; text-shadow: 0 2px 14px #000; }
     #big-num { font-size: clamp(48px, 18vw, 88px); font-weight: 800; color: var(--accent); line-height: 1; }
     #big-label { font-size: 12px; letter-spacing: 1.2px; color: rgba(255,255,255,0.75); text-transform: uppercase; }
     #big-range { font-size: 13px; color: var(--orange); margin-top: 2px; min-height: 16px; }
@@ -65,6 +65,8 @@
     #zoomRow { display: flex; gap: 8px; align-items: center; width: 100%; max-width: 440px; font-size: 11px; color: var(--muted); }
     #zoom { flex: 1; }
     #info { font-size: 10px; color: var(--muted); text-align: center; max-width: 440px; }
+    #build-footer { font-size: 9px; line-height: 1.35; color: var(--muted); text-align: center; max-width: 520px; }
+    #build-footer b { color: var(--text); font-weight: 650; }
 
     .panel { display: none; position: absolute; left: 8px; right: 8px; bottom: 180px; top: 150px; z-index: 20; overflow-y: auto;
       background: rgba(11,13,16,0.96); border: 1px solid var(--border); border-radius: 12px; padding: 12px; font-size: 12px; }
@@ -138,7 +140,7 @@
         <label>New-person threshold <input type="number" id="setLow" step="0.01" min="0.2" max="0.95"></label>
         <label>Confirm frames before counting (default 2) <input type="number" id="setConfirm" step="1" min="1" max="20"></label>
         <label>Multi-thread CPU (reloads page) <select id="setThreads"><option value="off">Off</option><option value="on">On (experimental)</option></select></label>
-        <p style="color:var(--muted);margin-top:8px">Re-ID scores: ≥ same-person threshold → same person (not recounted); below new-person threshold → new person; in between → “possible duplicate” for you to review. Changes apply immediately (detector/backend changes apply on next Start).</p>
+        <p style="color:var(--muted);margin-top:8px">Re-ID scores: ≥ same-person threshold → same person (not recounted); below new-person threshold → new person; in between → “possible duplicate” for you to review. Changes apply immediately (detector/backend changes apply on next Start). Dense mode “On” downloads the 21 MB density model the first time you turn it on. Auto and Off never download it; a crowded scene uses a tiled detection estimate instead.</p>
       </div>
 
       <div class="panel" id="dupesPanel">
@@ -178,6 +180,7 @@
         <button id="stopBtn" disabled>Stop & Total</button>
       </div>
       <div id="info">All processing stays on your device. Appearance fingerprints are kept in memory only and erased on Count Again or when the page closes — nothing is uploaded.</div>
+      <div id="build-footer"></div>
     </div>
 
     <div id="result">

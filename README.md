@@ -13,6 +13,7 @@ Counts people with a phone camera, running entirely in the browser (iPhone Safar
 1. **Get the two large files.** They aren't in git because of GitHub's file-size rules (see *Large files* below). Run `sh tools/fetch_assets.sh`, or download them from the Release by hand and put them here:
    - `crowd/vendor/ort-wasm-simd-threaded.asyncify.wasm` (26.8 MB, from onnxruntime-web 1.30.0)
    - `crowd/models/dmcount_qnrf_w8.onnx` (21.6 MB, optional. Without it, dense mode falls back to a rougher tiled-detection estimate.)
+   The page loads those paths first. If the wasm file is missing it tries jsDelivr (`onnxruntime-web@1.30.0`), which sends CORS headers. The dense model is downloaded only when Settings → Dense crowd mode is **On**. Both files can be redirected with `?assetBase=https://host/tcount/v1.0` (the file name is appended). The intended publish URL is `https://github.com/phymn/TCount/releases/download/v1.0/<filename>`, but GitHub release assets do not send `Access-Control-Allow-Origin`, so the browser cannot read them; use `fetch_assets.sh` or a CORS host. After the first successful load the service worker keeps a versioned copy (`tcount-crowd-1.2`) and the next launch, including offline, reads it from the device.
 2. Copy the repo into iSH, for example `~/tcount`, keeping the `crowd/` layout (`crowd/vendor/`, `crowd/models/`).
 3. Run `cd ~/tcount && python3 -m http.server 8080`.
 4. In Safari, open **`http://127.0.0.1:8080/crowd/`**. The original counters are at `http://127.0.0.1:8080/index-nogender.html` and `/index.html`.
@@ -32,7 +33,7 @@ Counts people with a phone camera, running entirely in the browser (iPhone Safar
 | File | Size | Why it's left out | Where to get it |
 |---|---|---|---|
 | `crowd/vendor/ort-wasm-simd-threaded.asyncify.wasm` | 26,781,914 B | over 5 MB; an unmodified upstream binary | jsDelivr `onnxruntime-web@1.30.0/dist/`, or Release v1.0 |
-| `crowd/models/dmcount_qnrf_w8.onnx` | 21,560,628 B | over 5 MB | GitHub Release v1.0 asset (attach the file from the zip) |
+| `crowd/models/dmcount_qnrf_w8.onnx` | 21,560,628 B | over 5 MB | GitHub Release v1.0 asset (attach the file from the zip). Loaded only when dense mode is On. |
 
 The small models (`yolox_nano` 1.1 MB, `yolox_tiny` 5.2 MB, `osnet_x0_5` 0.9 MB) are committed. Git LFS would work too, but Release assets are simpler for iSH users.
 

@@ -26,6 +26,9 @@ Settings (⚙): detector (Auto/Tiny/Nano/coco-ssd), backend, input size, small-p
 dense mode (Auto/On/Off), lens policy (Auto ladder/Manual + lens list), camera-motion
 compensation, same-person / new-person thresholds (default 0.80 / 0.65), confirm frames,
 experimental multi-thread CPU mode (service worker adds COOP/COEP, page reloads once).
+The same service worker caches the app, the wasm runtime and any model it has already
+fetched under a versioned name (tcount-crowd-1.2). A new version drops the old cache.
+The 21 MB dense model is fetched only when Dense crowd mode is On, then kept for offline use.
 
 Auto policies
   - No people / small people  -> tiled inference on the same frame (no lens change)

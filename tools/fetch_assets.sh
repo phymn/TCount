@@ -1,5 +1,7 @@
 #!/bin/sh
 # Downloads the two large files that are not stored in git into crowd/.
+# The app reads these paths. Browsers cannot fetch the GitHub release URL directly
+# (no CORS); pass ?assetBase= to point the page at a CORS-enabled copy instead.
 # Run from the repo root (works in iSH: apk add curl). Verifies sizes.
 set -e
 REL=${REL:-https://github.com/phymn/TCount/releases/download/v1.0}
