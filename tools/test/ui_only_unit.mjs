@@ -19,9 +19,9 @@ function check(name, fn) {
   catch (e) { results.push({ name, ok: false, err: String(e.message || e) }); }
 }
 
-check('version is crowd-1.3-ui.2 in app+sw', () => {
-  assert.match(app, /const VERSION = 'crowd-1\.3-ui\.2'/);
-  assert.match(sw, /const VERSION = 'crowd-1\.3-ui\.2'/);
+check('version is crowd-1.3-ui.3 in app+sw', () => {
+  assert.match(app, /const VERSION = 'crowd-1\.3-ui\.3'/);
+  assert.match(sw, /const VERSION = 'crowd-1\.3-ui\.3'/);
 });
 
 check('footer is version-only (no CHANGE blurb)', () => {

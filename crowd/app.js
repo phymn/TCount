@@ -8,10 +8,10 @@
 (() => {
 const $ = id => document.getElementById(id);
 const Q = new URLSearchParams(location.search);
-const VERSION = 'crowd-1.3-ui.2';
+const VERSION = 'crowd-1.3-ui.3';
 // Change notes live in Superuser settings only — Simple footer shows VERSION alone.
-const CHANGE_EN = 'Fix: Superuser Debug/Settings/Self-test Close now dismisses (panel display CSS). Footer still version-only.';
-const CHANGE_ES = 'Corrección: Cerrar en Depuración/Ajustes/Autoprueba del Superusuario ya oculta el panel. El pie sigue mostrando solo la versión.';
+const CHANGE_EN = 'Reliability: no overlapping detector runs; tile budget uses full-frame time; step timeouts + resume after background. Footer still version-only.';
+const CHANGE_ES = 'Fiabilidad: sin detecciones solapadas; presupuesto de tiles por tiempo de fotograma; timeouts y reanudación tras segundo plano. Pie solo con versión.';
 const now = () => performance.now();
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const abs = p => new URL(p, location.href).href;
@@ -315,8 +315,14 @@ const grayCtx = grayCanvas.getContext('2d', { willReadFrequently: true });
 
 // ------------------------------------------------------------------ YOLOX detector
 class YoloxDetector {
-  constructor(kind) { this.kind = kind; this.session = null; this.ep = null; this.name = 'YOLOX-' + (kind === 'tiny' ? 'Tiny' : 'Nano'); this.lastMs = 0; this.gain = 1; }
+  constructor(kind) { this.kind = kind; this.session = null; this.ep = null; this.name = 'YOLOX-' + (kind === 'tiny' ? 'Tiny' : 'Nano'); this.lastMs = 0; this.lastFrameMs = 0; this.gain = 1; this._chain = Promise.resolve(); }
   get url() { return abs(`models/yolox_${this.kind}_person_w8.onnx`); }
+  // Serialize session.run — concurrent ORT WASM calls on one session can hang Safari (iPhone).
+  _exclusive(fn) {
+    const run = this._chain.then(fn, fn);
+    this._chain = run.catch(() => {});
+    return run;
+  }
   async load(backendPref, onStatus) {
     const tryEp = async ep => {
       onStatus && onStatus(`Loading ${this.name} (${ep})…`);
@@ -348,9 +354,13 @@ class YoloxDetector {
   }
   // regions: [{x,y,w,h}] in frameCanvas coords; size = long side of the network input
   async detect(regions, size) {
-    const all = [];
-    for (const r of regions) for (const d of await this.runRegion(r, size)) all.push(d);
-    return regions.length > 1 ? nms(all, 0.5, 0.75) : all;
+    return this._exclusive(async () => {
+      const tAll = now();
+      const all = [];
+      for (const r of regions) for (const d of await this.runRegion(r, size)) all.push(d);
+      this.lastFrameMs = now() - tAll;
+      return regions.length > 1 ? nms(all, 0.5, 0.75) : all;
+    });
   }
   async runRegion(r, size) {
     const long = Math.max(r.w, r.h), sc = size / long;
@@ -364,7 +374,8 @@ class YoloxDetector {
     if (g === 1) { for (let i = 0, j = 0; i < n; i++, j += 4) { t[i] = px[j + 2]; t[n + i] = px[j + 1]; t[2 * n + i] = px[j]; } }
     else { for (let i = 0, j = 0; i < n; i++, j += 4) { t[i] = Math.min(255, px[j + 2] * g); t[n + i] = Math.min(255, px[j + 1] * g); t[2 * n + i] = Math.min(255, px[j] * g); } }
     const t0 = now();
-    const res = await this.session.run({ images: new ort.Tensor('float32', t, [1, 3, inH, inW]) });
+    // Per-region timeout: a hung WASM run must not freeze the count loop forever (camera can stay live).
+    const res = await withTimeout(this.session.run({ images: new ort.Tensor('float32', t, [1, 3, inH, inW]) }), 10000, 'YOLOX run');
     this.lastMs = now() - t0; this.lastIn = `${inW}×${inH}`;
     const o = res.output.data; const dets = [];
     let idx = 0;
@@ -431,7 +442,7 @@ class ReID {
       }
     }
     const t0 = now();
-    const r = await this.session.run({ input: new ort.Tensor('float32', t, [n, 3, 256, 128]) });
+    const r = await withTimeout(this.session.run({ input: new ort.Tensor('float32', t, [n, 3, 256, 128]) }), 10000, 're-ID run');
     this.lastMs = now() - t0;
     const f = r.feat.data, D = f.length / n, out = [];
     for (let k = 0; k < n; k++) {
@@ -799,7 +810,8 @@ function requestDense() {
 const tracker = new ByteTracker(), ledger = new Ledger(), motion = new MotionEstimator();
 let detector = null, reid = null, running = false, loopGen = 0, loadedKey = '';
 const st = { fps: 0, lastFrameT: 0, inFrame: 0, size: 640, tiles: false, noDetSince: 0, smallSince: 0, lumaEma: -1, light: 'ok',
-  pauseUntil: 0, lastLensSwitch: 0, csv: [], lastCsv: 0, timings: {}, lastDets: 0, crowdedness: 0, ladder: '', tiledEstAt: 0, reidQueue: 0, frames: 0 };
+  pauseUntil: 0, lastLensSwitch: 0, csv: [], lastCsv: 0, timings: {}, lastDets: 0, crowdedness: 0, ladder: '', tiledEstAt: 0, reidQueue: 0, frames: 0,
+  lastStepOk: 0, stepFail: 0, wantTiledEst: false, inferStalls: 0 };
 // Existing acceptance only: a matched track that already has a live ledger personId
 // (same registration path that increments the count). No new body/size/pose filter.
 function trackIsRegisteredAccepted(t) {
@@ -809,7 +821,8 @@ function trackIsRegisteredAccepted(t) {
 
 window.__tc = { st, ledger, tracker, dense, cam, S, CFG, loadDiag, assetFrom, CACHE_NAME, VERSION, ASSET_BASE,
   get detector() { return detector; }, get reid() { return reid; }, get running() { return running; },
-  denseModelEnabled, trackIsRegisteredAccepted, applyUiMode, t };
+  denseModelEnabled, trackIsRegisteredAccepted, applyUiMode, t, withTimeout,
+  get loopGen() { return loopGen; } };
 
 function confirmFrames() { return Math.max(1, S.confirm | 0); } // same in all light: register people as soon as they are seen; late de-dup cleans extras
 function markLensChange(why) {
@@ -958,9 +971,17 @@ async function step() {
   let overl = 0; for (let i = 0; i < hd.length; i++) for (let j = i + 1; j < hd.length; j++) if (iou(hd[i].box, hd[j].box) > 0.3) overl++;
   st.crowdedness = hd.length ? Math.min(1, 2 * overl / hd.length) : 0;
   autoPolicies(hd, W, H, dets.length);
-  st.timings = T; st.frames++;
+  // Dense tiled estimate runs HERE (serialized via detector._exclusive), never fire-and-forget
+  // from autoPolicies — overlapping session.run on WASM was a hang risk on iPhone Safari.
+  if (st.wantTiledEst && now() - st.tiledEstAt > 4000 && detector instanceof YoloxDetector) {
+    st.wantTiledEst = false;
+    t0 = now();
+    try { await tiledEstimate(); } catch (e) { logErr('tiledEst', e); }
+    T.tiledEst = now() - t0;
+  }
+  st.timings = T; st.frames++; st.lastStepOk = now();
   const tf = now(); if (st.lastFrameT) st.fps = st.fps ? st.fps * 0.8 + 0.2 * (1000 / (tf - st.lastFrameT)) : 1000 / (tf - st.lastFrameT); st.lastFrameT = tf;
-  if (S.size === 'auto' && detector instanceof YoloxDetector) adaptSize(T.det / regs.length);
+  if (S.size === 'auto' && detector instanceof YoloxDetector) adaptSize(T.det / Math.max(1, regs.length));
 }
 function adaptSize(msPerRegion) {
   const sizes = [416, 512, 640, 800];
@@ -1130,7 +1151,10 @@ function autoPolicies(hd, W, H, nAll) {
   else {
     const want = (st.noDetSince && tNow - st.noDetSince > 1500) || (st.smallSince && tNow - st.smallSince > 1500) || dense.active;
     if (want) { st.tiles = true; st.tilesWhy = st.noDetSince ? 'no detections' : dense.active ? 'dense' : 'small people'; } else if (hs.length && medH > 0.2) st.tiles = false;
-    if (detector && detector.lastMs > 300 && !dense.active) st.tiles = false; // too slow to tile on this device
+    // Gate on FULL frame detect time (sum of regions), not only the last region — otherwise
+    // 5-tile frames stay enabled while the loop crawls (~1 s/frame) and feels "stuck".
+    const frameMs = detector && (detector.lastFrameMs || detector.lastMs) || 0;
+    if (detector && frameMs > 400 && !dense.active) st.tiles = false;
   }
   // ladder steps 2-3: widen first; telephoto only for a single distant target; hysteresis 10 s
   if (S.lensMode === 'auto' && cam.facing === 'environment' && tNow - st.lastLensSwitch > 10000) {
@@ -1151,8 +1175,8 @@ function autoPolicies(hd, W, H, nAll) {
     if (denseModelEnabled()) {
       startDenseWorker();
       if (!dense.failed && (tNow - dense.reqAt > 1500 || dense.busy)) requestDense();
-      if (dense.failed && tNow - st.tiledEstAt > 3000) tiledEstimate();
-    } else if (tNow - st.tiledEstAt > 3000) tiledEstimate();
+      if (dense.failed) st.wantTiledEst = true; // run inside step() — never concurrent with main detect
+    } else st.wantTiledEst = true;
   }
 }
 async function tiledEstimate() { // documented fallback when the density model is unavailable: full frame + 3x3 tiles, NMS-merged
@@ -1226,7 +1250,11 @@ function uiTick() {
     else banner('light');
     if (dense.active) banner('denseinfo', 'Dense crowd: people overlap too much to count one by one. “Est. crowd” is a density estimate of who is visible now (no identities, not added to Unique). Unique is likely an undercount here.', 'info');
     else banner('denseinfo');
-  }
+    // Camera can stay live while the inference loop stalls — surface that clearly.
+    if (st.lastStepOk && now() - st.lastStepOk > 5000) {
+      banner('stall', 'Counting is slow or stalled (camera still live). Waiting for the detector to recover…', 'warn');
+    } else banner('stall');
+  } else banner('stall');
   if ($('debugPanel').classList.contains('visible')) renderDebug();
   if ($('dupesPanel').classList.contains('visible')) renderDupes();
 }
@@ -1238,7 +1266,8 @@ function renderDebug() {
     detector && detector.bench ? `bench: ${detector.bench.join(' | ')}` : '',
     detector && detector.loadErrors && detector.loadErrors.length ? `load notes: ${detector.loadErrors.join(' | ')}` : '',
     `re-id: ${reid ? reid.name + ' / ' + reid.ep + ' ' + reid.lastMs.toFixed(0) + ' ms/batch' : 'off'}  queue=${st.reidQueue}  same≥${S.high}  new<${S.low}`,
-    `ms: grab ${f(T.grab)}  cmc ${f(T.cmc)}  det ${f(T.det)} (last net ${detector ? f(detector.lastMs) : '—'})  track ${f(T.track)}  reid ${f(T.reid)}  →  ${st.fps.toFixed(1)} fps`,
+    `ms: grab ${f(T.grab)}  cmc ${f(T.cmc)}  det ${f(T.det)} (last net ${detector ? f(detector.lastMs) : '—'} frame ${detector ? f(detector.lastFrameMs) : '—'})  track ${f(T.track)}  reid ${f(T.reid)}${T.tiledEst != null ? '  tiledEst ' + f(T.tiledEst) : ''}  →  ${st.fps.toFixed(1)} fps`,
+    `health: lastStepOk=${st.lastStepOk ? ((now() - st.lastStepOk) / 1000).toFixed(1) + 's ago' : '—'}  stepFail=${st.stepFail || 0}  inferStalls=${st.inferStalls || 0}  wantTiledEst=${!!st.wantTiledEst}`,
     `ui: ${S.ui}  lang: ${S.lang}  simple boxes == existing registered personId (no new filter)`,
     `cmc: dx=${motion.last.dx.toFixed(1)} dy=${motion.last.dy.toFixed(1)} px  inliers=${(motion.last.conf || 0).toFixed(2)}  blocks=${motion.last.n || 0}`,
     `light: ${st.light}  brightness median=${st.lumaMed ?? '—'} mean=${st.lumaMean != null ? st.lumaMean.toFixed(0) : '—'} p98=${st.lumaP98 ?? '—'} smoothed=${st.lumaEma.toFixed(0)} (dark<${CFG.darkLuma}, very dark<${CFG.veryDarkLuma}, ok>${CFG.lightExitLuma})  frame grab=${GRAB_MODES[st.grabMode || 0]} blackRun=${st.blackRun || 0}  confirm=${confirmFrames()} frames  torch=${cam.caps.torch ? (cam.torchOn ? 'on' : 'off') : 'n/a'}`,
@@ -1300,12 +1329,30 @@ setInterval(() => { uiTick(); csvTick(); }, 250);
 async function loop(gen) {
   while (running && gen === loopGen) {
     if (video.readyState < 2 || !video.videoWidth) { await new Promise(r => setTimeout(r, 100)); continue; }
-    try { await step(); }
-    catch (e) { logErr('step', e); status('Detection error: ' + (e.message || e), 'error'); await new Promise(r => setTimeout(r, 500)); }
+    try {
+      await withTimeout(step(), 25000, 'frame step');
+      st.stepFail = 0;
+      if ($('status').className === 'error') status(t('counting'), 'running');
+    } catch (e) {
+      st.stepFail = (st.stepFail || 0) + 1;
+      st.inferStalls = (st.inferStalls || 0) + 1;
+      logErr('step', e);
+      // Soft recover: drop tiling / shrink input so the next frame is cheaper.
+      st.tiles = false; st.wantTiledEst = false;
+      if (S.size === 'auto' && st.size > 416) st.size = 416;
+      status('Detection slow/recovering: ' + (e.message || e), 'error');
+      await new Promise(r => setTimeout(r, st.stepFail > 2 ? 800 : 300));
+    }
     await new Promise(r => setTimeout(r, 0));
   }
 }
 function startLoop() { loopGen++; const g = loopGen; loop(g); if (!rafId) render(); status(t('counting'), 'running'); }
+// Safari often freezes WASM work while backgrounded; resume the loop without resetting the ledger.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible' || !running) return;
+  st.tiles = false; st.wantTiledEst = false;
+  startLoop();
+});
 
 // ---------------------------------------------------------------- controls
 $('startBtn').onclick = async () => {
