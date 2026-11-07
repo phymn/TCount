@@ -8,9 +8,10 @@
 (() => {
 const $ = id => document.getElementById(id);
 const Q = new URLSearchParams(location.search);
-const VERSION = 'crowd-1.3-ui';
-const CHANGE_EN = 'Simple/Superuser UI; Count/Done; boxes only for registered people. Detection pipeline unchanged from crowd-1.2.';
-const CHANGE_ES = 'UI Simple/Superusuario; Contar/Listo; cajas solo para personas registradas. Pipeline de detección igual que crowd-1.2.';
+const VERSION = 'crowd-1.3-ui.1';
+// Change notes live in Superuser settings only — Simple footer shows VERSION alone.
+const CHANGE_EN = 'Simple/Superuser UI; Count/Done; boxes only for registered people. Detection pipeline unchanged from crowd-1.2. Footer shows version only.';
+const CHANGE_ES = 'UI Simple/Superusuario; Contar/Listo; cajas solo para personas registradas. Pipeline igual que crowd-1.2. El pie muestra solo la versión.';
 const now = () => performance.now();
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const abs = p => new URL(p, location.href).href;
@@ -62,6 +63,8 @@ function applyI18n() {
   if (!running && !$('result').classList.contains('visible')) status(t('ready'), 'ready');
   if ($('startBtn') && !running) $('startBtn').textContent = t('count');
   if ($('stopBtn')) $('stopBtn').textContent = t('done');
+  const notes = $('build-notes');
+  if (notes) notes.textContent = S.lang === 'es' ? CHANGE_ES : CHANGE_EN;
   document.documentElement.lang = S.lang === 'es' ? 'es' : 'en';
 }
 function applyUiMode() {
@@ -77,7 +80,8 @@ function status(msg, cls = '') { $('status').textContent = msg; $('status').clas
 function renderFooter() {
   const el = $('build-footer');
   if (!el) return;
-  el.innerHTML = `<b>${VERSION}</b> — ${CHANGE_EN}<br>${CHANGE_ES}`;
+  // Simple + Superuser: footer is version name only (no EN/ES change blurb).
+  el.textContent = VERSION;
 }
 renderFooter();
 const banners = new Map();

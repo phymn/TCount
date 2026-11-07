@@ -173,6 +173,7 @@
         <label>Confirm frames before counting (default 2) <input type="number" id="setConfirm" step="1" min="1" max="20"></label>
         <label>Multi-thread CPU (reloads page) <select id="setThreads"><option value="off">Off</option><option value="on">On (experimental)</option></select></label>
         <p style="color:var(--muted);margin-top:8px">Re-ID scores: ≥ same-person threshold → same person (not recounted); below new-person threshold → new person; in between → “possible duplicate” for you to review. Changes apply immediately (detector/backend changes apply on next Start). Dense mode “On” downloads the 21 MB density model the first time you turn it on. Auto and Off never download it; a crowded scene uses a tiled detection estimate instead.</p>
+        <p id="build-notes" style="color:var(--muted);margin-top:10px;font-size:11px;line-height:1.4"></p>
       </div>
 
       <div class="panel" id="dupesPanel">

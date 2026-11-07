@@ -62,34 +62,53 @@ await page.goto(base, { waitUntil: 'domcontentloaded', timeout: 60000 });
 await page.waitForFunction(() => window.__tc && window.__tc.VERSION, null, { timeout: 30000 });
 
 const version = await page.evaluate(() => window.__tc.VERSION);
-record('footer/VERSION', 'REAL_CODE', 'crowd-1.3-ui', version, version === 'crowd-1.3-ui');
+record('footer/VERSION', 'REAL_CODE', 'crowd-1.3-ui.1', version, version === 'crowd-1.3-ui.1');
 
 const simpleDefault = await page.evaluate(() => ({
   bodySimple: document.body.classList.contains('mode-simple'),
   chipsHidden: getComputedStyle(document.getElementById('chips')).display === 'none',
   startLabel: document.getElementById('startBtn').textContent.trim(),
   stopLabel: document.getElementById('stopBtn').textContent.trim(),
+  footer: document.getElementById('build-footer').textContent.trim(),
+  footerHtml: document.getElementById('build-footer').innerHTML,
 }));
 record('Simple default UI', 'REAL_DOM', 'mode-simple, Count/Done, chips hidden', JSON.stringify(simpleDefault),
   simpleDefault.bodySimple && simpleDefault.chipsHidden && simpleDefault.startLabel === 'Count' && simpleDefault.stopLabel === 'Done');
+record('Simple footer version-only (EN)', 'REAL_DOM', 'crowd-1.3-ui.1 exactly, no multiline/CHANGE copy',
+  JSON.stringify({ footer: simpleDefault.footer, html: simpleDefault.footerHtml }),
+  simpleDefault.footer === 'crowd-1.3-ui.1' && !simpleDefault.footer.includes('\n') && !simpleDefault.footerHtml.includes('<br') && !/Simple\/Super|pipeline|Contar|cajas/i.test(simpleDefault.footer));
 
 await page.click('#langSeg [data-lang="es"]');
 const es = await page.evaluate(() => ({
   start: document.getElementById('startBtn').textContent.trim(),
   stop: document.getElementById('stopBtn').textContent.trim(),
   status: document.getElementById('status').textContent,
+  footer: document.getElementById('build-footer').textContent.trim(),
 }));
 record('ES i18n', 'REAL_DOM', 'Contar / Listo', `${es.start}/${es.stop}`, es.start === 'Contar' && es.stop === 'Listo');
+record('Simple footer version-only (ES)', 'REAL_DOM', 'still crowd-1.3-ui.1 only (no ES change blurb)', es.footer,
+  es.footer === 'crowd-1.3-ui.1' && !/personas|Pipeline|versión|Contar|cajas/i.test(es.footer));
 await page.click('#langSeg [data-lang="en"]');
 
 await page.click('#uiSeg [data-ui="super"]');
-const superUi = await page.evaluate(() => ({
-  bodySuper: document.body.classList.contains('mode-super'),
-  chipsShown: getComputedStyle(document.getElementById('chips')).display !== 'none',
-  settingsBtn: !!document.getElementById('settingsBtn') && getComputedStyle(document.getElementById('settingsBtn')).display !== 'none',
-}));
+const superUi = await page.evaluate(() => {
+  document.getElementById('settingsBtn').click();
+  const notes = document.getElementById('build-notes');
+  return {
+    bodySuper: document.body.classList.contains('mode-super'),
+    chipsShown: getComputedStyle(document.getElementById('chips')).display !== 'none',
+    settingsBtn: !!document.getElementById('settingsBtn') && getComputedStyle(document.getElementById('settingsBtn')).display !== 'none',
+    footer: document.getElementById('build-footer').textContent.trim(),
+    notes: notes ? notes.textContent.trim() : '',
+    notesVisible: notes ? getComputedStyle(notes).display !== 'none' : false,
+  };
+});
 record('Superuser reveals controls', 'REAL_DOM', 'mode-super + chips visible', JSON.stringify(superUi),
   superUi.bodySuper && superUi.chipsShown);
+record('Superuser holds change notes; footer still version-only', 'REAL_DOM',
+  'footer=crowd-1.3-ui.1; build-notes has EN change text',
+  JSON.stringify({ footer: superUi.footer, notes: superUi.notes.slice(0, 80) }),
+  superUi.footer === 'crowd-1.3-ui.1' && /Simple\/Superuser|registered people/i.test(superUi.notes));
 
 // Inject registered people WITHOUT changing registration code path semantics —
 // we call the same ledger.create the pipeline uses, then assert box helper.

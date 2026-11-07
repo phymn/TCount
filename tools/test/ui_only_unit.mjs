@@ -19,9 +19,16 @@ function check(name, fn) {
   catch (e) { results.push({ name, ok: false, err: String(e.message || e) }); }
 }
 
-check('version is crowd-1.3-ui in app+sw', () => {
-  assert.match(app, /const VERSION = 'crowd-1\.3-ui'/);
-  assert.match(sw, /const VERSION = 'crowd-1\.3-ui'/);
+check('version is crowd-1.3-ui.1 in app+sw', () => {
+  assert.match(app, /const VERSION = 'crowd-1\.3-ui\.1'/);
+  assert.match(sw, /const VERSION = 'crowd-1\.3-ui\.1'/);
+});
+
+check('footer is version-only (no CHANGE blurb)', () => {
+  assert.match(app, /el\.textContent = VERSION/);
+  assert.doesNotMatch(app, /build-footer[\s\S]{0,120}CHANGE_EN/);
+  assert.match(html, /id="build-notes"/); // Superuser settings holds notes
+  assert.match(app, /\$\('build-notes'\)/);
 });
 
 check('no pose/rtmpose/bodyOk gate in UI release', () => {
