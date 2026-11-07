@@ -27,7 +27,9 @@ dense mode (Auto/On/Off), lens policy (Auto ladder/Manual + lens list), camera-m
 compensation, same-person / new-person thresholds (default 0.80 / 0.65), confirm frames,
 experimental multi-thread CPU mode (service worker adds COOP/COEP, page reloads once).
 The same service worker caches the app, the wasm runtime and any model it has already
-fetched under a versioned name (tcount-crowd-1.2). A new version drops the old cache.
+fetched under a versioned name (tcount-crowd-1.3-ui.2). A new version drops the old cache.
+Simple mode (default): Count / Done, boxes only for registered people. Superuser reveals diagnostics.
+Detection/counting pipeline is unchanged from crowd-1.2 (UI-only release).
 The 21 MB dense model is fetched only when Dense crowd mode is On, then kept for offline use.
 
 Auto policies

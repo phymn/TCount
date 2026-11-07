@@ -8,19 +8,26 @@
 (() => {
 const $ = id => document.getElementById(id);
 const Q = new URLSearchParams(location.search);
-const VERSION = 'crowd-1.2';
-const CHANGE_EN = 'Faster launches: WASM and models stay on this device. The dense model downloads only when dense mode is on.';
-const CHANGE_ES = 'Arranques más rápidos: el WASM y los modelos se quedan en el dispositivo. El modelo denso se descarga solo con el modo denso activado.';
+const VERSION = 'crowd-1.3-ui.2';
+// Change notes live in Superuser settings only — Simple footer shows VERSION alone.
+const CHANGE_EN = 'Fix: Superuser Debug/Settings/Self-test Close now dismisses (panel display CSS). Footer still version-only.';
+const CHANGE_ES = 'Corrección: Cerrar en Depuración/Ajustes/Autoprueba del Superusuario ya oculta el panel. El pie sigue mostrando solo la versión.';
 const now = () => performance.now();
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const abs = p => new URL(p, location.href).href;
 
 // ------------------------------------------------------------------ settings
 const DEFAULTS = { model: 'auto', backend: 'auto', size: 'auto', tiles: 'auto', dense: 'auto', lensMode: 'auto', cmc: 'on',
-  high: 0.80, low: 0.65, confirm: 2, threads: 'off', lens: '', v: 2 };
+  high: 0.80, low: 0.65, confirm: 2, threads: 'off', lens: '', ui: 'simple', lang: 'en', v: 3 };
 let S = Object.assign({}, DEFAULTS);
-try { const o = JSON.parse(localStorage.getItem('tcrowd-settings') || '{}'); if (!o.v || o.v < 2) delete o.confirm; delete o.v; Object.assign(S, o); } catch (e) {} // v2: new default confirm=2
+try {
+  const o = JSON.parse(localStorage.getItem('tcrowd-settings') || '{}');
+  if (!o.v || o.v < 2) delete o.confirm;
+  if (!o.v || o.v < 3) { /* keep prior detector settings; new ui/lang defaults apply when absent */ }
+  delete o.v; Object.assign(S, o);
+} catch (e) {}
 for (const k of Object.keys(DEFAULTS)) if (Q.has(k)) S[k] = typeof DEFAULTS[k] === 'number' ? +Q.get(k) : Q.get(k);
+if (Q.get('ui') === 'superuser') S.ui = 'super';
 const saveSettings = () => { try { localStorage.setItem('tcrowd-settings', JSON.stringify(S)); } catch (e) {} };
 
 const CFG = {
@@ -30,12 +37,56 @@ const CFG = {
   ghostMs: 700, ghostFrames: 8, ghostGoneMs: 2500, darkLuma: 40, veryDarkLuma: 18, lightExitLuma: 48, lightEnterMs: 2500, lightExitMs: 1200, lightWarmupMs: 2000, blackLuma: 6, blackFrames: 15,
 };
 
+const I18N = {
+  en: {
+    ready: 'Ready — tap Count', counting: 'Counting people…', starting: 'Starting…', stopped: 'Stopped',
+    count: 'Count', done: 'Done', countAgain: 'Count Again', people: 'People', inFrame: 'In Frame',
+    dupes: 'Possible dupes', tapReview: 'tap to review', estCrowd: 'Est. crowd', uniquePeople: 'people counted',
+    settings: 'Settings', finalTitle: 'Final count', finalNote: 'Best estimate. A moving phone cannot guarantee an exact unique total across occlusions, darkness and revisits.',
+    privacy: 'All processing stays on your device. Appearance fingerprints are kept in memory only and erased on Count Again or when the page closes — nothing is uploaded.',
+    simple: 'Simple', superuser: 'Superuser', running: 'Counting…',
+  },
+  es: {
+    ready: 'Listo — toca Contar', counting: 'Contando personas…', starting: 'Iniciando…', stopped: 'Detenido',
+    count: 'Contar', done: 'Listo', countAgain: 'Contar de nuevo', people: 'Personas', inFrame: 'En cuadro',
+    dupes: 'Posibles dup.', tapReview: 'toca para revisar', estCrowd: 'Multitud est.', uniquePeople: 'personas contadas',
+    settings: 'Ajustes', finalTitle: 'Conteo final', finalNote: 'Mejor estimación. Un teléfono en movimiento no garantiza un total exacto con oclusiones, oscuridad y revisitas.',
+    privacy: 'Todo el procesamiento queda en tu dispositivo. Las huellas de apariencia solo viven en memoria y se borran al Contar de nuevo o al cerrar la página — no se sube nada.',
+    simple: 'Simple', superuser: 'Superusuario', running: 'Contando…',
+  }
+};
+function t(key) { return (I18N[S.lang] || I18N.en)[key] || (I18N.en[key] || key); }
+function applyI18n() {
+  document.querySelectorAll('[data-i18n]').forEach(el => { const k = el.getAttribute('data-i18n'); if (k) el.textContent = t(k); });
+  const ss = $('uiSimpleBtn'), su = $('uiSuperBtn');
+  if (ss) ss.textContent = t('simple'); if (su) su.textContent = t('superuser');
+  if (!running && !$('result').classList.contains('visible')) status(t('ready'), 'ready');
+  if ($('startBtn') && !running) $('startBtn').textContent = t('count');
+  if ($('stopBtn')) $('stopBtn').textContent = t('done');
+  const notes = $('build-notes');
+  if (notes) notes.textContent = S.lang === 'es' ? CHANGE_ES : CHANGE_EN;
+  document.documentElement.lang = S.lang === 'es' ? 'es' : 'en';
+}
+function applyUiMode() {
+  document.body.classList.toggle('mode-simple', S.ui !== 'super');
+  document.body.classList.toggle('mode-super', S.ui === 'super');
+  document.querySelectorAll('#uiSeg [data-ui]').forEach(b => b.classList.toggle('on', b.dataset.ui === (S.ui === 'super' ? 'super' : 'simple')));
+  document.querySelectorAll('#langSeg [data-lang]').forEach(b => b.classList.toggle('on', b.dataset.lang === S.lang));
+  // Dismiss panels on mode switch so a Super panel open under Simple's !important
+  // hide does not reappear stuck when returning to Super (session/count untouched).
+  for (const id of ['settingsPanel', 'debugPanel', 'dupesPanel', 'selfTestPanel']) {
+    const el = $(id); if (el) el.classList.remove('visible');
+  }
+  applyI18n();
+}
+
 // ------------------------------------------------------------------ UI helpers
 function status(msg, cls = '') { $('status').textContent = msg; $('status').className = cls; }
 function renderFooter() {
   const el = $('build-footer');
   if (!el) return;
-  el.innerHTML = `<b>${VERSION}</b> — ${CHANGE_EN}<br>${CHANGE_ES}`;
+  // Simple + Superuser: footer is version name only (no EN/ES change blurb).
+  el.textContent = VERSION;
 }
 renderFooter();
 const banners = new Map();
@@ -749,9 +800,16 @@ const tracker = new ByteTracker(), ledger = new Ledger(), motion = new MotionEst
 let detector = null, reid = null, running = false, loopGen = 0, loadedKey = '';
 const st = { fps: 0, lastFrameT: 0, inFrame: 0, size: 640, tiles: false, noDetSince: 0, smallSince: 0, lumaEma: -1, light: 'ok',
   pauseUntil: 0, lastLensSwitch: 0, csv: [], lastCsv: 0, timings: {}, lastDets: 0, crowdedness: 0, ladder: '', tiledEstAt: 0, reidQueue: 0, frames: 0 };
+// Existing acceptance only: a matched track that already has a live ledger personId
+// (same registration path that increments the count). No new body/size/pose filter.
+function trackIsRegisteredAccepted(t) {
+  if (!t || !t.matchedThisFrame || !t.personId) return false;
+  return !!ledger.root(t.personId);
+}
+
 window.__tc = { st, ledger, tracker, dense, cam, S, CFG, loadDiag, assetFrom, CACHE_NAME, VERSION, ASSET_BASE,
   get detector() { return detector; }, get reid() { return reid; }, get running() { return running; },
-  denseModelEnabled };
+  denseModelEnabled, trackIsRegisteredAccepted, applyUiMode, t };
 
 function confirmFrames() { return Math.max(1, S.confirm | 0); } // same in all light: register people as soon as they are seen; late de-dup cleans extras
 function markLensChange(why) {
@@ -1129,13 +1187,19 @@ function draw() {
   }
   const fs = Math.max(12, canvas.width / 45);
   ctx.font = `bold ${fs}px sans-serif`;
-  for (const t of tracker.tracked) {
-    if (!t.matchedThisFrame) continue;
-    const [x, y, w, h] = t.box, p = t.personId ? ledger.root(t.personId) : null, col = colorFor(p);
-    const label = p ? `P${p.id}${p.state === 'possible' ? '?' : ''}` : '…';
-    ctx.strokeStyle = col; ctx.lineWidth = Math.max(2, canvas.width / 400); ctx.setLineDash(p ? [] : [6, 4]); ctx.strokeRect(x, y, w, h); ctx.setLineDash([]);
+  const simple = S.ui !== 'super';
+  for (const tr of tracker.tracked) {
+    if (!tr.matchedThisFrame) continue;
+    const accepted = trackIsRegisteredAccepted(tr);
+    // Simple: boxes ONLY for accepted/registered people (existing personId registration — no new filter).
+    if (simple && !accepted) continue;
+    const [x, y, w, h] = tr.box, p = tr.personId ? ledger.root(tr.personId) : null;
+    const col = accepted ? colorFor(p) : '#9aa3b5';
+    const label = accepted ? `P${p.id}${p.state === 'possible' ? '?' : ''}` : '…';
+    ctx.strokeStyle = col; ctx.lineWidth = Math.max(2, canvas.width / 400); ctx.setLineDash(accepted ? [] : [6, 4]); ctx.strokeRect(x, y, w, h); ctx.setLineDash([]);
     const ly = Math.max(fs + 4, y);
-    ctx.fillStyle = col; ctx.fillRect(x, ly - fs - 4, ctx.measureText(label).width + 8, fs + 4);
+    const tw = ctx.measureText(label).width + 8;
+    ctx.fillStyle = col; ctx.fillRect(x, ly - fs - 4, tw, fs + 4);
     ctx.fillStyle = '#000'; ctx.fillText(label, x + 4, ly - 4);
   }
 }
@@ -1175,6 +1239,7 @@ function renderDebug() {
     detector && detector.loadErrors && detector.loadErrors.length ? `load notes: ${detector.loadErrors.join(' | ')}` : '',
     `re-id: ${reid ? reid.name + ' / ' + reid.ep + ' ' + reid.lastMs.toFixed(0) + ' ms/batch' : 'off'}  queue=${st.reidQueue}  same≥${S.high}  new<${S.low}`,
     `ms: grab ${f(T.grab)}  cmc ${f(T.cmc)}  det ${f(T.det)} (last net ${detector ? f(detector.lastMs) : '—'})  track ${f(T.track)}  reid ${f(T.reid)}  →  ${st.fps.toFixed(1)} fps`,
+    `ui: ${S.ui}  lang: ${S.lang}  simple boxes == existing registered personId (no new filter)`,
     `cmc: dx=${motion.last.dx.toFixed(1)} dy=${motion.last.dy.toFixed(1)} px  inliers=${(motion.last.conf || 0).toFixed(2)}  blocks=${motion.last.n || 0}`,
     `light: ${st.light}  brightness median=${st.lumaMed ?? '—'} mean=${st.lumaMean != null ? st.lumaMean.toFixed(0) : '—'} p98=${st.lumaP98 ?? '—'} smoothed=${st.lumaEma.toFixed(0)} (dark<${CFG.darkLuma}, very dark<${CFG.veryDarkLuma}, ok>${CFG.lightExitLuma})  frame grab=${GRAB_MODES[st.grabMode || 0]} blackRun=${st.blackRun || 0}  confirm=${confirmFrames()} frames  torch=${cam.caps.torch ? (cam.torchOn ? 'on' : 'off') : 'n/a'}`,
     ...loadDiag.slice(-12).map(l => 'load: ' + l),
@@ -1240,11 +1305,11 @@ async function loop(gen) {
     await new Promise(r => setTimeout(r, 0));
   }
 }
-function startLoop() { loopGen++; const g = loopGen; loop(g); if (!rafId) render(); status('Counting people…', 'running'); }
+function startLoop() { loopGen++; const g = loopGen; loop(g); if (!rafId) render(); status(t('counting'), 'running'); }
 
 // ---------------------------------------------------------------- controls
 $('startBtn').onclick = async () => {
-  $('startBtn').disabled = true; status('Starting…', 'running');
+  $('startBtn').disabled = true; status(t('starting'), 'running');
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { status('Camera API unavailable (needs 127.0.0.1 or https)', 'error'); $('startBtn').disabled = false; return; }
   const modelsP = ensureModels(); // overlaps the camera permission prompt and the stream startup
   try { await openCamera({ label: S.lensMode === 'manual' ? S.lens : '' }); }
@@ -1253,13 +1318,14 @@ $('startBtn').onclick = async () => {
   try { await modelsP; } catch (e) { status('Model load failed: ' + (e.message || e), 'error'); $('startBtn').disabled = false; return; }
   tracker.reset(); motion.reset(); st.csv = []; st.lastLensSwitch = now(); st.lumaEma = -1; st.runStart = now(); st.camStart = now(); st.light = 'ok'; st.lightPendSince = 0; st.blackRun = 0;
   running = true;
-  $('stopBtn').disabled = false; $('switchBtn').disabled = false; $('startBtn').textContent = 'Running…';
+  $('stopBtn').disabled = false; $('switchBtn').disabled = false; $('startBtn').textContent = t('running');
   startLoop();
 };
 $('stopBtn').onclick = () => {
+  // Done: freeze count and stop processing/registration (loop exits; camera released).
   running = false; loopGen++;
   try { ledger.reconcile(null); } catch (e) { logErr('reconcile', e); }
-  if (cam.stream) cam.stream.getTracks().forEach(t => t.stop()); cam.stream = null; video.srcObject = null;
+  if (cam.stream) cam.stream.getTracks().forEach(tr => tr.stop()); cam.stream = null; video.srcObject = null;
   const u = ledger.unique, pd = ledger.possible, uv = ledger.unverified;
   $('final-total').textContent = pd ? `${u - pd}–${u}` : u;
   const parts = [`<b>${u}</b> counted · ${pd} possible duplicate${pd === 1 ? '' : 's'}${pd ? ` → best estimate ${u - pd}–${u}` : ''}`];
@@ -1268,7 +1334,7 @@ $('stopBtn').onclick = () => {
   if (st.csv.some(r => r[8] !== 'ok')) parts.push('Parts of the session were in low light (low confidence)');
   if (ledger.ghosts) parts.push(`${ledger.ghosts} split-second detection${ledger.ghosts === 1 ? '' : 's'} (under ${CFG.ghostMs / 1000} s, then gone) treated as noise and not counted`);
   $('final-detail').innerHTML = parts.join('<br>');
-  $('result').classList.add('visible'); status('Stopped', '');
+  $('result').classList.add('visible'); status(t('stopped'), '');
   $('startBtn').disabled = $('stopBtn').disabled = $('switchBtn').disabled = true;
 };
 $('switchBtn').onclick = async () => {
@@ -1281,10 +1347,17 @@ $('switchBtn').onclick = async () => {
 $('resetBtn').onclick = () => {
   $('result').classList.remove('visible'); tracker.reset(); ledger.reset(); motion.reset(); TRACK_ID = 1;
   dense.est = null; dense.peak = 0; dense.map = null; dense.active = false; st.csv = []; st.inFrame = 0; uiTick();
-  $('startBtn').disabled = false; $('startBtn').textContent = 'Start Camera';
+  $('startBtn').disabled = false; $('startBtn').textContent = t('count');
   $('stopBtn').disabled = $('switchBtn').disabled = true;
-  status('Ready — tap Start', 'ready'); ctx.clearRect(0, 0, canvas.width, canvas.height);
+  status(t('ready'), 'ready'); ctx.clearRect(0, 0, canvas.width, canvas.height);
 };
+// UI mode + language — switching preserves session/count (no reset).
+document.querySelectorAll('#uiSeg [data-ui]').forEach(b => b.onclick = () => {
+  S.ui = b.dataset.ui === 'super' ? 'super' : 'simple'; saveSettings(); applyUiMode(); uiTick();
+});
+document.querySelectorAll('#langSeg [data-lang]').forEach(b => b.onclick = () => {
+  S.lang = b.dataset.lang === 'es' ? 'es' : 'en'; saveSettings(); applyI18n(); uiTick();
+});
 $('zoom').oninput = () => updateZoomLabel();
 $('zoom').onchange = e => setZoom(e.target.value);
 $('torchBtn').onclick = toggleTorch;
@@ -1412,5 +1485,6 @@ setupThreads(false);
 window.addEventListener('error', e => logErr('Error', e.error || e.message));
 window.addEventListener('unhandledrejection', e => logErr('Promise', e.reason));
 if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) status('Camera not available here (needs 127.0.0.1 or https)', 'error');
+applyUiMode();
 uiTick();
 })();

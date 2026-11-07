@@ -5,7 +5,7 @@
    The dense model is not precached; it enters the cache only when the page requests it.
    COOP/COEP/CORP are added only when Settings → Multi-thread CPU is on (python http.server
    cannot send those headers). The flag lives in this same cache so it survives a worker restart. */
-const VERSION = 'crowd-1.2';
+const VERSION = 'crowd-1.3-ui.2';
 const CACHE = 'tcount-' + VERSION;
 const THREADS_URL = new URL('__tc_threads', self.registration.scope).href;
 const SHELL = [
