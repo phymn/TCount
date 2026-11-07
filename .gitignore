@@ -1,6 +1,9 @@
 # large binaries: published as GitHub Release assets / fetched by tools/fetch_assets.sh
 crowd/vendor/ort-wasm-simd-threaded.asyncify.wasm
 crowd/models/dmcount_qnrf_w8.onnx
+# RTMPose weights — NOT redistributed until commercial/dataset licensing is cleared.
+crowd/models/rtmpose*.onnx
+crowd/models/rtmpose*/
 *.zip
 *.pth
 *.pt
