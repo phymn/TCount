@@ -8,10 +8,10 @@
 (() => {
 const $ = id => document.getElementById(id);
 const Q = new URLSearchParams(location.search);
-const VERSION = 'crowd-1.3-ui.1';
+const VERSION = 'crowd-1.3-ui.2';
 // Change notes live in Superuser settings only — Simple footer shows VERSION alone.
-const CHANGE_EN = 'Simple/Superuser UI; Count/Done; boxes only for registered people. Detection pipeline unchanged from crowd-1.2. Footer shows version only.';
-const CHANGE_ES = 'UI Simple/Superusuario; Contar/Listo; cajas solo para personas registradas. Pipeline igual que crowd-1.2. El pie muestra solo la versión.';
+const CHANGE_EN = 'Fix: Superuser Debug/Settings/Self-test Close now dismisses (panel display CSS). Footer still version-only.';
+const CHANGE_ES = 'Corrección: Cerrar en Depuración/Ajustes/Autoprueba del Superusuario ya oculta el panel. El pie sigue mostrando solo la versión.';
 const now = () => performance.now();
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const abs = p => new URL(p, location.href).href;
@@ -72,6 +72,11 @@ function applyUiMode() {
   document.body.classList.toggle('mode-super', S.ui === 'super');
   document.querySelectorAll('#uiSeg [data-ui]').forEach(b => b.classList.toggle('on', b.dataset.ui === (S.ui === 'super' ? 'super' : 'simple')));
   document.querySelectorAll('#langSeg [data-lang]').forEach(b => b.classList.toggle('on', b.dataset.lang === S.lang));
+  // Dismiss panels on mode switch so a Super panel open under Simple's !important
+  // hide does not reappear stuck when returning to Super (session/count untouched).
+  for (const id of ['settingsPanel', 'debugPanel', 'dupesPanel', 'selfTestPanel']) {
+    const el = $(id); if (el) el.classList.remove('visible');
+  }
   applyI18n();
 }
 

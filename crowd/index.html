@@ -39,8 +39,9 @@
     .chip { flex: none; white-space: nowrap; font-size: 10px; padding: 2px 6px; border-radius: 8px; background: rgba(0,0,0,0.55); border: 1px solid var(--border); color: var(--gray); }
     .chip.on { color: var(--accent); border-color: #1d5c3a; } .chip.warn { color: var(--warn); border-color: #6b5a14; }
     .chip.bad { color: var(--danger); border-color: #6b1d1d; }
-    .super-only { display: none; }
-    body.mode-super .super-only { display: revert; }
+    /* Superuser-only chrome: hide in Simple. Do NOT force display in Super —
+       `display: revert` previously outranked `.panel { display: none }`, so
+       Debug/Settings/Self-test stayed visible after Close removed `.visible`. */
     body.mode-simple .super-only { display: none !important; }
     body.mode-simple #chips, body.mode-simple #stats .stat-advanced { display: none; }
     body.mode-simple #zoomRow { display: none; }

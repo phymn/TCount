@@ -19,9 +19,9 @@ function check(name, fn) {
   catch (e) { results.push({ name, ok: false, err: String(e.message || e) }); }
 }
 
-check('version is crowd-1.3-ui.1 in app+sw', () => {
-  assert.match(app, /const VERSION = 'crowd-1\.3-ui\.1'/);
-  assert.match(sw, /const VERSION = 'crowd-1\.3-ui\.1'/);
+check('version is crowd-1.3-ui.2 in app+sw', () => {
+  assert.match(app, /const VERSION = 'crowd-1\.3-ui\.2'/);
+  assert.match(sw, /const VERSION = 'crowd-1\.3-ui\.2'/);
 });
 
 check('footer is version-only (no CHANGE blurb)', () => {
@@ -29,6 +29,12 @@ check('footer is version-only (no CHANGE blurb)', () => {
   assert.doesNotMatch(app, /build-footer[\s\S]{0,120}CHANGE_EN/);
   assert.match(html, /id="build-notes"/); // Superuser settings holds notes
   assert.match(app, /\$\('build-notes'\)/);
+});
+
+check('super-only CSS does not force panel display (Close bug fix)', () => {
+  assert.doesNotMatch(html, /body\.mode-super \.super-only \{\s*display:\s*revert/);
+  assert.match(html, /body\.mode-simple \.super-only \{\s*display:\s*none !important/);
+  assert.match(html, /\.panel\.visible \{\s*display:\s*block/);
 });
 
 check('no pose/rtmpose/bodyOk gate in UI release', () => {
