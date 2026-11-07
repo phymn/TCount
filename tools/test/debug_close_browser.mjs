@@ -40,10 +40,10 @@ async function withPage(engineName, launcher, exePath) {
   await page.waitForFunction(() => window.__tc?.VERSION);
 
   const ver = await page.evaluate(() => window.__tc.VERSION);
-  record(engineName, 'VERSION', 'REAL_CODE', 'crowd-1.3-ui.2', ver, ver === 'crowd-1.3-ui.2');
+  record(engineName, 'VERSION', 'REAL_CODE', 'crowd-1.3-ui.3', ver, ver === 'crowd-1.3-ui.3');
 
   const footer = await page.evaluate(() => document.getElementById('build-footer').textContent.trim());
-  record(engineName, 'footer version-only', 'REAL_DOM', 'crowd-1.3-ui.2', footer, footer === 'crowd-1.3-ui.2');
+  record(engineName, 'footer version-only', 'REAL_DOM', 'crowd-1.3-ui.3', footer, footer === 'crowd-1.3-ui.3');
 
   // Panels must start hidden in Super (the bug made them display:block always).
   const initial = await page.evaluate(() => {
@@ -112,7 +112,7 @@ async function withPage(engineName, launcher, exePath) {
   }));
   record(engineName, 'switch to Simple with Debug open', 'REAL_DOM+SIMULATED_LEDGER',
     `unique=${uniqueBefore}, debug hidden, simple, footer version`, JSON.stringify(afterSimple),
-    afterSimple.unique === uniqueBefore && afterSimple.debugDisplay === 'none' && afterSimple.simple && afterSimple.footer === 'crowd-1.3-ui.2');
+    afterSimple.unique === uniqueBefore && afterSimple.debugDisplay === 'none' && afterSimple.simple && afterSimple.footer === 'crowd-1.3-ui.3');
 
   await page.click('#uiSeg [data-ui="super"]');
   await page.click('#langSeg [data-lang="es"]');
@@ -124,7 +124,7 @@ async function withPage(engineName, launcher, exePath) {
   }));
   record(engineName, 'EN/ES + Super restore preserves count; debug stays closed', 'REAL_DOM',
     `unique=${uniqueBefore}, debug none, footer version`, JSON.stringify(afterLang),
-    afterLang.unique === uniqueBefore && afterLang.debugDisplay === 'none' && afterLang.footer === 'crowd-1.3-ui.2');
+    afterLang.unique === uniqueBefore && afterLang.debugDisplay === 'none' && afterLang.footer === 'crowd-1.3-ui.3');
 
   // Count start/done (SIMULATED camera) — best-effort; model load may fail in CI images
   await page.click('#startBtn');
