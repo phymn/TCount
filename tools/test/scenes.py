@@ -6,6 +6,7 @@ BG = [f'/testassets/bg/bg{i}.jpg' for i in ok['bg']]
 others = [s for s in S if s not in PAIR]
 random.seed(3)
 L3 = [{'id': 'cam-uw', 'label': 'Back Ultra Wide Camera', 'zoom': 0.6}, {'id': 'cam-w', 'label': 'Back Camera', 'zoom': 1}, {'id': 'cam-t', 'label': 'Back Telephoto Camera', 'zoom': 2.5}]
+# P: Builds one synthetic person path.
 def P(sprite, h, path, **k): return dict(sprite=sprite, h=h, path=[dict(t=a, x=b, y=c) for a, b, c in path], **k)
 sc = {}
 sc['walk3'] = dict(gt=3, dur=22, bg=BG[0], people=[

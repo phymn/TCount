@@ -3,6 +3,9 @@ from playwright.async_api import async_playwright
 br, port, mode = sys.argv[1], sys.argv[2], sys.argv[3]
 SC = json.load(open('scenes.json')); FAKE = open('fakecam.js').read(); sc = dict(SC['walk3'])
 if mode == 'black': sc['brightness'] = 0.0; sc['noise'] = 0
+# main: Runs the in-app self-test headless.
+# Why these APIs: json: reads/writes structured data files; Playwright/Chromium: drives a headless browser for
+#   automated local tests.
 async def main():
     async with async_playwright() as p:
         if br == 'webkit': b = await p.webkit.launch(); ctx = await b.new_context(**p.devices['iPhone 13'])

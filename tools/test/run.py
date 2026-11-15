@@ -5,6 +5,9 @@ ap.add_argument('--browser', default='chromium'); ap.add_argument('--scenes', de
 ap.add_argument('--params', default=''); ap.add_argument('--tag', default=''); ap.add_argument('--shot', action='store_true')
 a = ap.parse_args()
 SC = json.load(open('scenes.json')); FAKE = open('fakecam.js').read()
+# run_one: Runs one synthetic scene and compares the count to ground truth.
+# Why these APIs: json: reads/writes structured data files; Playwright/Chromium: drives a headless browser for
+#   automated local tests; time: measures or paces work.
 async def run_one(p, name):
     sc = SC[name]
     if a.browser == 'webkit':
@@ -36,6 +39,9 @@ async def run_one(p, name):
                fps=round(sum(fpsv) / max(1, len(fpsv)), 2), frames=last['frames'], tiles_any=any(s['tiles'] for s in samples), dark_any=any(s['light'] != 'ok' for s in samples), dense_any=any(s['dense'] for s in samples),
                est_last=last['est'], est_src=last['src'], lens_final=last['lens'], final=final, maxInFrame=max(s['inF'] for s in samples), **st, logs=logs[-8:])
     await b.close(); return res
+# main: Runs all scenes.
+# Why these APIs: json: reads/writes structured data files; open(): reads/writes a local file;
+#   Playwright/Chromium: drives a headless browser for automated local tests.
 async def main():
     async with async_playwright() as p:
         for name in a.scenes.split(','):
