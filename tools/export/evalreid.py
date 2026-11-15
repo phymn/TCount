@@ -1,18 +1,24 @@
 import glob, os, random, numpy as np, cv2, onnxruntime as ort, sys, time
 random.seed(0)
 R='market/Market-1501-v15.09.15/' if os.path.isdir('market/Market-1501-v15.09.15') else 'market/'
+# pid: Person ID from a file name.
+# Why these APIs: os / os.path: handles local paths.
 def pid(f): b=os.path.basename(f); return int(b.split('_')[0]), int(b.split('_')[1][1])
 Q=sorted(glob.glob(R+'query/*.jpg')); G=[g for g in sorted(glob.glob(R+'bounding_box_test/*.jpg')) if pid(g)[0]>0]
 ids=sorted(set(pid(q)[0] for q in Q)); sel=set(random.sample(ids,250))
 Q=[q for q in Q if pid(q)[0] in sel]; Q=[ [q for q in Q if pid(q)[0]==i][0] for i in sorted(sel)]
 Gs=[g for g in G if pid(g)[0] in sel]; Gd=random.sample([g for g in G if pid(g)[0] not in sel],1500); G=Gs+Gd
 mean=np.array([0.485,0.456,0.406],np.float32); std=np.array([0.229,0.224,0.225],np.float32)
+# prep: Loads and normalizes a crop like the browser does.
+# Why these APIs: NumPy: vectorized numeric work; OpenCV: image/video decoding and processing.
 def prep(f):
     im=cv2.imread(f)[:,:,::-1]; im=cv2.resize(im,(128,256),interpolation=cv2.INTER_LINEAR).astype(np.float32)/255
     return ((im-mean)/std).transpose(2,0,1)
 X={f:prep(f) for f in Q+G}
 for model in sys.argv[1:]:
     so=ort.SessionOptions(); so.intra_op_num_threads=1; s=ort.InferenceSession(model,so)
+    # emb: Computes embeddings for a list of crops.
+    # Why these APIs: NumPy: vectorized numeric work.
     def emb(fs):
         out=[]
         for i in range(0,len(fs),32): out.append(s.run(None,{'input':np.stack([X[f] for f in fs[i:i+32]])})[0])

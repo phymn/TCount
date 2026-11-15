@@ -128,23 +128,29 @@
 
   <script>
     // ========== Person Tracker ==========
+    // Tracker: Simple IoU tracker for the original counter (counts men/women by face votes).
     class Tracker {
+      // constructor: Initializes counters and tracks.
       constructor() { this.reset(); this.maxAge = 14; this.minHits = 2; }
 
+      // iou: Intersection-over-union of two boxes.
       iou(a, b) {
         const x1 = Math.max(a[0], b[0]), y1 = Math.max(a[1], b[1]);
         const x2 = Math.min(a[0]+a[2], b[0]+b[2]), y2 = Math.min(a[1]+a[3], b[1]+b[3]);
         const inter = Math.max(0, x2-x1) * Math.max(0, y2-y1);
         return inter / (a[2]*a[3] + b[2]*b[3] - inter + 1e-6);
       }
+      // centroid: Center of a box.
       centroid(b) { return [b[0]+b[2]/2, b[1]+b[3]/2]; }
 
+      // tally: Adds a confirmed track to the gender tally.
       tally(tr) {
         if (tr.gender === 'male') this.men++;
         else if (tr.gender === 'female') this.women++;
         else this.unknown++;
       }
 
+      // update: Matches detections to tracks and confirms new people.
       update(dets, w, h) {
         const diag = Math.hypot(w, h) || 1;
         const matchedT = new Set(), matchedD = new Set();
@@ -178,6 +184,7 @@
       }
 
       // Vote: needs 3 agreeing results (prob >= 0.7) in the last 5
+      // addVote: Adds a gender vote for a track.
       addVote(id, gender, prob) {
         const tr = this.tracks.find(t => t.id === id);
         if (!tr || tr.gender || !this.confirmed.has(id) || prob < 0.7) return false;
@@ -190,6 +197,7 @@
         return true;
       }
 
+      // reset: Clears all tracks and counts.
       reset() {
         this.nextId = 1; this.tracks = []; this.confirmed = new Set();
         this.unique = this.men = this.women = this.unknown = 0;
@@ -206,15 +214,22 @@
     const headCanvas = document.createElement('canvas');
     headCanvas.width = headCanvas.height = 160;
     const hctx = headCanvas.getContext('2d');
+    // $: Shorthand for getElementById.
+    // Why these APIs: DOM query: finds the page element to read or update.
     const $ = id => document.getElementById(id);
     const MODEL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/model/';
 
+    // status: Shows a status message.
+    // Why these APIs: textContent: sets text safely without HTML parsing.
     function status(msg, cls = '') { $('status').textContent = msg; $('status').className = cls; }
+    // showError: Reports an error.
     function showError(where, e) {
       console.error(where, e);
       status(`${where}: ${e && (e.message || e.name) || e}`, 'error');
     }
 
+    // updateUI: Updates the counters.
+    // Why these APIs: textContent: sets text safely without HTML parsing.
     function updateUI() {
       $('current').textContent = tracker.tracks.filter(t => t.timeSinceUpdate === 0 && tracker.confirmed.has(t.id)).length;
       $('men').textContent = tracker.men;
@@ -226,6 +241,9 @@
       $('faces').textContent = 'Faces found: ' + facesFound;
     }
 
+    // loadModels: Loads the person and face models.
+    // Why these APIs: FaceDetector (Shape Detection API): uses the platform face detector when available (cheap,
+    //   hardware-accelerated).
     async function loadModels() {
       if (modelsLoaded) return;
       status('Starting AI engine…', 'running');
@@ -240,6 +258,9 @@
       status('Models ready (' + tf.getBackend() + ') — starting camera', 'ready');
     }
 
+    // startCam: Opens the camera.
+    // Why these APIs: navigator.mediaDevices.getUserMedia: opens the camera stream locally; frames never leave the
+    //   device.
     async function startCam() {
       if (stream) stream.getTracks().forEach(t => t.stop());
       try {
@@ -257,6 +278,7 @@
       } catch (e) { showError('Camera error', e); return false; }
     }
 
+    // assignVote: Assigns a face estimate to a track.
     function assignVote(tr, f) {
       if (!f || !f.gender) return;
       const g = f.gender === 'male' ? 'male' : 'female';
@@ -266,6 +288,10 @@
     }
 
     // Per-person head crop, then full-frame fallback
+    // estimateGender: Estimates gender for unconfirmed tracks from face crops.
+    // Why these APIs: CanvasRenderingContext2D.drawImage: copies/scales the current video frame into a canvas (GPU-
+    //   accelerated in browsers); FaceDetector (Shape Detection API): uses the platform face detector when available
+    //   (cheap, hardware-accelerated).
     async function estimateGender(active) {
       const todo = active.filter(t => !t.gender);
       if (!todo.length) return;
@@ -301,6 +327,7 @@
       }
     }
 
+    // draw: Draws boxes.
     function draw(active) {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       const lw = Math.max(2, canvas.width / 320);
@@ -317,6 +344,8 @@
       });
     }
 
+    // loop: Detection loop.
+    // Why these APIs: setTimeout: defers or delays work without blocking.
     async function loop(gen) {
       if (!running || gen !== loopGen) return;
       if (video.readyState < 2) { timer = setTimeout(() => loop(gen), 200); return; }
@@ -334,12 +363,16 @@
       if (running && gen === loopGen) timer = setTimeout(() => loop(gen), 150);
     }
 
+    // startLoop: Restarts the loop timer.
+    // Why these APIs: clearTimeout/clearInterval: cancels a pending timer.
     function startLoop() {
       if (timer) clearTimeout(timer);
       loopGen++;
       loop(loopGen);
     }
 
+    // $('startBtn').onclick: Start button.
+    // Why these APIs: textContent: sets text safely without HTML parsing.
     $('startBtn').onclick = async () => {
       $('startBtn').disabled = true;
       status('Starting…', 'running');
@@ -361,6 +394,9 @@
       startLoop();
     };
 
+    // $('stopBtn').onclick: Stop button.
+    // Why these APIs: clearTimeout/clearInterval: cancels a pending timer; textContent: sets text safely without
+    //   HTML parsing; classList: toggles CSS state classes.
     $('stopBtn').onclick = () => {
       running = false; loopGen++;
       if (timer) clearTimeout(timer);
@@ -377,6 +413,8 @@
       $('switchBtn').disabled = true;
     };
 
+    // $('switchBtn').onclick: Switch-camera button.
+    // Why these APIs: clearTimeout/clearInterval: cancels a pending timer.
     $('switchBtn').onclick = async () => {
       if (!running) return;
       $('switchBtn').disabled = true;
@@ -392,6 +430,8 @@
       $('switchBtn').disabled = false;
     };
 
+    // $('resetBtn').onclick: Reset button.
+    // Why these APIs: textContent: sets text safely without HTML parsing; classList: toggles CSS state classes.
     $('resetBtn').onclick = () => {
       $('result').classList.remove('visible');
       tracker.reset(); facesFound = 0;

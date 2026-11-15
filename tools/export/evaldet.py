@@ -1,6 +1,8 @@
 import json, numpy as np, cv2, onnxruntime as ort, time, sys, contextlib, io
 from pycocotools.coco import COCO
 from pycocotools.cocoeval import COCOeval
+# decode: Decodes raw YOLOX outputs into boxes for offline accuracy checks.
+# Why these APIs: NumPy: vectorized numeric work.
 def decode(out, H, W):
     grids=[];strides=[]
     for s in (8,16,32):
@@ -9,6 +11,8 @@ def decode(out, H, W):
     g=np.concatenate(grids); st=np.concatenate(strides)
     xy=(out[:,:2]+g)*st; wh=np.exp(out[:,2:4])*st
     return np.concatenate([xy,wh],1), out[:,4]*out[:,5]
+# nms: NumPy NMS for the evaluation script.
+# Why these APIs: NumPy: vectorized numeric work.
 def nms(b,s,th=0.45):
     x1=b[:,0]-b[:,2]/2;y1=b[:,1]-b[:,3]/2;x2=x1+b[:,2];y2=y1+b[:,3];o=s.argsort()[::-1];keep=[]
     while o.size:
@@ -20,6 +24,9 @@ def nms(b,s,th=0.45):
 coco=COCO('instances_val2017.json') if False else None
 with contextlib.redirect_stdout(io.StringIO()): coco=COCO('instances_val2017.json')
 sel=json.load(open('coco/sel.json'))['sel']
+# run: Runs a model over the test set and reports accuracy/speed.
+# Why these APIs: NumPy: vectorized numeric work; OpenCV: image/video decoding and processing; time: measures or
+#   paces work.
 def run(model, S):
     so=ort.SessionOptions(); so.intra_op_num_threads=1
     sess=ort.InferenceSession(model,so); res=[]; t=0
