@@ -1,6 +1,8 @@
 /* Dense-crowd density estimation (DM-Count, MIT) in a worker so the camera loop never freezes.
    Output: density map whose sum = estimated number of visible people. No identities, no images kept. */
 let session = null, ep = 'wasm';
+// getModel: Downloads (or reads cached) dense model bytes.
+// Why these APIs: fetch: loads the resource over HTTP(S) with streaming/abort support.
 async function getModel(url) { // fallback only; the page normally passes modelBytes so this file is not fetched twice
   let res;
   try { res = await fetch(url, { cache: 'no-store' }); } catch (e) { throw new Error('density model request failed: ' + (e.message || e)); }
@@ -9,6 +11,11 @@ async function getModel(url) { // fallback only; the page normally passes modelB
   if (b.length !== 21560628) throw new Error(`models/dmcount_qnrf_w8.onnx is incomplete (${b.length} of 21560628 bytes) — re-copy part 2`);
   return b;
 }
+// self.onmessage: Worker message handler: loads the dense model and returns crowd estimates off the UI thread.
+// Why these APIs: onnxruntime-web (ort): runs the ONNX model in the browser (WebGPU/WASM) so inference stays on-
+//   device; navigator.gpu (WebGPU): detects GPU support to pick the fastest execution provider; postMessage:
+//   passes data between the page and a worker/service worker; performance.now: high-resolution monotonic timing
+//   for FPS/latency.
 self.onmessage = async (e) => {
   const m = e.data;
   try {

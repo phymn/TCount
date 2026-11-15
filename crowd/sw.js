@@ -53,12 +53,17 @@ self.addEventListener('message', event => {
   if (data.type === 'threads') event.waitUntil(setThreads(!!data.on));
 });
 
+// setThreads: Stores the threads on/off flag.
+// Why these APIs: Cache Storage API: keeps large assets on the device so later loads work offline; Response:
+//   returns the edited/redirect response from the Worker.
 async function setThreads(on) {
   threadsFlag = on;
   const cache = await caches.open(CACHE);
   await cache.put(THREADS_URL, new Response(on ? 'on' : 'off', { headers: { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' } }));
 }
 
+// threadsOn: Reads the threads flag.
+// Why these APIs: Cache Storage API: keeps large assets on the device so later loads work offline.
 async function threadsOn() {
   if (threadsFlag !== null) return threadsFlag;
   try {
@@ -69,20 +74,30 @@ async function threadsOn() {
   return threadsFlag;
 }
 
+// fileName: File name of a URL.
 function fileName(url) { return String(url).split('?')[0].split('/').pop(); }
+// expectedFor: Expected size for a cached file.
 function expectedFor(url) { return EXPECT[fileName(url)] || 0; }
 
+// cacheRequest: Normalized cache key (query string removed).
+// Why these APIs: Request: reads the incoming request to decide how to proxy it; URL: parses and rewrites URLs
+//   safely.
 function cacheRequest(url) {
   const clean = new URL(url.href);
   clean.search = '';
   return new Request(clean.href);
 }
 
+// cacheable: Whether a request should be cached.
 function cacheable(url) {
   if (fileName(url) === '__tc_threads') return false;
   return /\.(wasm|onnx|js|html|txt)$/.test(url.pathname) || url.pathname.endsWith('/');
 }
 
+// putChecked: Caches a response only if complete and the expected size.
+// Why these APIs: Cache Storage API: keeps large assets on the device so later loads work offline; Response:
+//   returns the edited/redirect response from the Worker; URL: parses and rewrites URLs safely; Headers:
+//   copies/adjusts response headers (cache, content type).
 async function putChecked(cache, key, res) {
   if (!res || !res.ok || res.type === 'opaque') return;
   const exp = expectedFor(key.url);
@@ -101,6 +116,9 @@ async function putChecked(cache, key, res) {
   catch (e) { /* quota / private mode: the page still has the bytes for this launch */ }
 }
 
+// withPolicy: Adds cross-origin isolation headers when threads are on (needed for SharedArrayBuffer).
+// Why these APIs: Response: returns the edited/redirect response from the Worker; Headers: copies/adjusts
+//   response headers (cache, content type).
 function withPolicy(res, coi) {
   if (!coi || !res) return res;
   if (res.status === 0) return res;
@@ -120,6 +138,9 @@ self.addEventListener('fetch', event => {
   event.respondWith(handle(req, url));
 });
 
+// handle: Serves from cache first, then network, caching good responses.
+// Why these APIs: fetch: loads the resource over HTTP(S) with streaming/abort support; Cache Storage API: keeps
+//   large assets on the device so later loads work offline.
 async function handle(req, url) {
   const cache = await caches.open(CACHE);
   const coi = await threadsOn();

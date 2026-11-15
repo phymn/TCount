@@ -6,13 +6,22 @@
    Nothing leaves the device. */
 'use strict';
 (() => {
+// $: Shorthand for document.getElementById; keeps the UI code short.
+// Why these APIs: DOM query: finds the page element to read or update.
 const $ = id => document.getElementById(id);
 const Q = new URLSearchParams(location.search);
 const VERSION = 'crowd-1.2';
 const CHANGE_EN = 'Faster launches: WASM and models stay on this device. The dense model downloads only when dense mode is on.';
 const CHANGE_ES = 'Arranques más rápidos: el WASM y los modelos se quedan en el dispositivo. El modelo denso se descarga solo con el modo denso activado.';
+// now: Monotonic time in ms for frame timing, timeouts and track ages.
+// Why these APIs: performance.now: high-resolution monotonic timing for FPS/latency.
 const now = () => performance.now();
+// clamp: Clamps v into [a, b] so settings and geometry stay in range.
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+// abs: Resolves a path relative to the page so assets load from the same folder (works offline and under any
+// subpath).
+// Why these APIs: location/history: navigates or reads the current page URL; URL: parses and rewrites URLs
+//   safely.
 const abs = p => new URL(p, location.href).href;
 
 // ------------------------------------------------------------------ settings
@@ -21,6 +30,9 @@ const DEFAULTS = { model: 'auto', backend: 'auto', size: 'auto', tiles: 'auto', 
 let S = Object.assign({}, DEFAULTS);
 try { const o = JSON.parse(localStorage.getItem('tcrowd-settings') || '{}'); if (!o.v || o.v < 2) delete o.confirm; delete o.v; Object.assign(S, o); } catch (e) {} // v2: new default confirm=2
 for (const k of Object.keys(DEFAULTS)) if (Q.has(k)) S[k] = typeof DEFAULTS[k] === 'number' ? +Q.get(k) : Q.get(k);
+// saveSettings: Persists the user's settings so they survive reloads.
+// Why these APIs: localStorage: persists small settings across reloads; JSON.stringify: serializes results into
+//   a plain string that can cross the script boundary.
 const saveSettings = () => { try { localStorage.setItem('tcrowd-settings', JSON.stringify(S)); } catch (e) {} };
 
 const CFG = {
@@ -31,7 +43,11 @@ const CFG = {
 };
 
 // ------------------------------------------------------------------ UI helpers
+// status: Shows a short status message in the status bar.
+// Why these APIs: textContent: sets text safely without HTML parsing.
 function status(msg, cls = '') { $('status').textContent = msg; $('status').className = cls; }
+// renderFooter: Renders the build footer (version only in Simple mode, per standing rule).
+// Why these APIs: innerHTML: renders a block of markup in one write (inputs are built by the app).
 function renderFooter() {
   const el = $('build-footer');
   if (!el) return;
@@ -39,6 +55,9 @@ function renderFooter() {
 }
 renderFooter();
 const banners = new Map();
+// banner: Shows or clears a named error/info banner so each problem is reported once.
+// Why these APIs: document.createElement: builds UI elements at runtime; innerHTML: renders a block of markup in
+//   one write (inputs are built by the app); textContent: sets text safely without HTML parsing.
 function banner(key, msg, kind = 'error') {
   if (!msg) { const b = banners.get(key); if (b) { b.remove(); banners.delete(key); } return; }
   let b = banners.get(key);
@@ -48,7 +67,10 @@ function banner(key, msg, kind = 'error') {
   b.innerHTML = ''; const x = document.createElement('button'); x.textContent = '✕'; x.onclick = () => { b.remove(); banners.delete(key); };
   b.appendChild(x); b.appendChild(document.createTextNode(msg));
 }
+// chip: Updates a small status chip (backend, model, lens).
+// Why these APIs: textContent: sets text safely without HTML parsing.
 function chip(id, text, cls = '') { const c = $(id); c.textContent = text; c.className = 'chip ' + cls; }
+// logErr: Logs an error with where it happened and keeps it for the debug panel.
 function logErr(where, e) { console.error(where, e); (window.__scriptErrors || []).push(where + ': ' + (e && (e.message || e))); }
 
 // ------------------------------------------------------------------ environment checks
@@ -67,7 +89,9 @@ const ASSETS = [
   ['models/yolox_nano_person_w8.onnx', 1117717, true], ['models/yolox_tiny_person_w8.onnx', 5208654, true], ['models/osnet_x0_5_reid_w8.onnx', 875829, true],
   ['models/dmcount_qnrf_w8.onnx', 21560628, false], ['dense-worker.js', 0, true], ['app.js', 0, true],
 ];
+// expectedSize: Looks up the expected byte size of an asset so incomplete or wrong downloads are detected.
 const expectedSize = rel => { const a = ASSETS.find(x => x[0] === rel); return a ? a[1] : 0; };
+// MB: Formats bytes as megabytes for messages.
 const MB = n => (n / 1048576).toFixed(1) + ' MB';
 const REID_REL = 'models/osnet_x0_5_reid_w8.onnx';
 const WASM_REL = 'vendor/ort-wasm-simd-threaded.asyncify.wasm';
@@ -87,6 +111,8 @@ const loadDiag = []; // shown in Debug and in error banners
 const inflight = new Map();
 let ortReady = false, ortWasmBytes = null;
 
+// remoteCandidates: Lists fallback download URLs for the two assets too big for Pages (WASM runtime, dense
+// model).
 function remoteCandidates(rel) {
   if (rel !== WASM_REL && rel !== DENSE_REL) return [];
   const name = rel.split('/').pop(), urls = [];
@@ -96,10 +122,14 @@ function remoteCandidates(rel) {
   if (!urls.includes(release)) urls.push(release);
   return urls;
 }
+// openCache: Opens the app's Cache Storage bucket if the browser supports it.
+// Why these APIs: Cache Storage API: keeps large assets on the device so later loads work offline.
 async function openCache() {
   if (!('caches' in window)) return null;
   try { return await caches.open(CACHE_NAME); } catch (e) { return null; }
 }
+// cacheGet: Returns a cached asset if present and of the expected size, else null.
+// Why these APIs: Cache Storage API: keeps large assets on the device so later loads work offline.
 async function cacheGet(rel) {
   const cache = await openCache();
   if (!cache) return null;
@@ -112,6 +142,9 @@ async function cacheGet(rel) {
     return buf;
   } catch (e) { return null; }
 }
+// cachePut: Stores a downloaded asset in the cache so the next start is instant and offline.
+// Why these APIs: Cache Storage API: keeps large assets on the device so later loads work offline; Response:
+//   returns the edited/redirect response from the Worker.
 async function cachePut(rel, buf) {
   const cache = await openCache();
   if (!cache) return;
@@ -121,6 +154,8 @@ async function cachePut(rel, buf) {
     await cache.put(abs(rel), new Response(buf.slice(0), { headers }));
   } catch (e) { loadDiag.push('cache write failed (' + rel.split('/').pop() + '): ' + (e.message || e)); }
 }
+// purgeOldCaches: Deletes cache buckets from older app versions to free device storage.
+// Why these APIs: Cache Storage API: keeps large assets on the device so later loads work offline.
 async function purgeOldCaches() {
   if (!('caches' in window)) return;
   try {
@@ -128,11 +163,16 @@ async function purgeOldCaches() {
     await Promise.all(keys.filter(k => k.startsWith('tcount-') && k !== CACHE_NAME).map(k => caches.delete(k)));
   } catch (e) {}
 }
+// rememberAsset: Records where an asset came from and how long it took (debug panel).
 function rememberAsset(rel, buf, t0, from) {
   const ms = now() - t0;
   assetFrom[rel] = { bytes: buf.length, ms: Math.round(ms), from };
   loadDiag.push(`${rel}: ${MB(buf.length)} in ${(ms / 1000).toFixed(2)} s from ${from}`);
 }
+// downloadUrl: Downloads one URL with progress, size check and a timeout.
+// Why these APIs: fetch: loads the resource over HTTP(S) with streaming/abort support; AbortController: cancels
+//   a request or wait that ran too long; setTimeout: defers or delays work without blocking;
+//   clearTimeout/clearInterval: cancels a pending timer.
 async function downloadUrl(url, rel, onProgress, timeoutMs, cacheMode) {
   const exp = expectedSize(rel), t0 = now();
   const ctl = typeof AbortController !== 'undefined' ? new AbortController() : null;
@@ -154,6 +194,9 @@ async function downloadUrl(url, rel, onProgress, timeoutMs, cacheMode) {
   finally { clearTimeout(timer); }
   return buf;
 }
+// fetchAssetOnce: Gets an asset from cache, then same-origin, then fallbacks, verifying size each time.
+// Why these APIs: location/history: navigates or reads the current page URL; URL: parses and rewrites URLs
+//   safely.
 async function fetchAssetOnce(rel, onProgress, timeoutMs) {
   const exp = expectedSize(rel), t0 = now();
   const cached = await cacheGet(rel);
@@ -180,6 +223,7 @@ async function fetchAssetOnce(rel, onProgress, timeoutMs) {
   }
   throw lastErr || new Error(rel + ': download failed');
 }
+// fetchAsset: De-duplicates concurrent requests for the same asset.
 async function fetchAsset(rel, onProgress, timeoutMs = 180000) {
   const existing = inflight.get(rel);
   if (existing) return existing;
@@ -187,7 +231,13 @@ async function fetchAsset(rel, onProgress, timeoutMs = 180000) {
   inflight.set(rel, p);
   return p;
 }
+// withTimeout: Races a promise against a timer so a hung step reports an error instead of freezing.
+// Why these APIs: setTimeout: defers or delays work without blocking; clearTimeout/clearInterval: cancels a
+//   pending timer.
 function withTimeout(p, ms, what) { let t; return Promise.race([p, new Promise((_, rej) => { t = setTimeout(() => rej(new Error(what + ' timed out after ' + ms / 1000 + ' s')), ms); })]).finally(() => clearTimeout(t)); }
+// setupOrt: Configures onnxruntime-web (WASM paths, threads, SIMD) before any model loads.
+// Why these APIs: onnxruntime-web (ort): runs the ONNX model in the browser (WebGPU/WASM) so inference stays on-
+//   device.
 async function setupOrt(onS) {
   if (typeof ort === 'undefined') return false;
   if (ortReady) return true;
@@ -206,12 +256,17 @@ async function setupOrt(onS) {
   } catch (e) { loadDiag.push('runtime prefetch failed: ' + e.message); throw e; }
   ortReady = true; return true;
 }
+// errText: Turns any thrown value into readable text.
 function errText(e) { return e ? ((e.name && e.name !== 'Error' ? e.name + ': ' : '') + (e.message || String(e))) : 'unknown error'; }
+// webgpuAvailable: Checks for a working WebGPU adapter so the GPU is used only when it exists.
+// Why these APIs: navigator.gpu (WebGPU): detects GPU support to pick the fastest execution provider.
 async function webgpuAvailable() {
   try { if (!navigator.gpu) return false; const a = await navigator.gpu.requestAdapter(); return !!a; } catch (e) { return false; }
 }
 let gpuProbe = null;
+// gpuOk: True when the WebGPU check passed.
 function gpuOk() { if (!gpuProbe) gpuProbe = webgpuAvailable(); return gpuProbe; }
+// detectorKind: Chooses nano vs tiny detector (auto picks by device capability).
 async function detectorKind() {
   if (S.model !== 'auto') return S.model;
   // Auto on a CPU-only phone used to download Tiny and then throw it away for Nano. Start on Nano.
@@ -220,6 +275,9 @@ async function detectorKind() {
   return (await gpuOk()) ? 'tiny' : 'nano';
 }
 const modelBytes = new Map();
+// makeSession: Creates an ONNX Runtime session from cached model bytes on the chosen execution provider.
+// Why these APIs: onnxruntime-web (ort): runs the ONNX model in the browser (WebGPU/WASM) so inference stays on-
+//   device.
 async function makeSession(url, ep, onS) {
   const rel = url.replace(abs('./'), '');
   let bytes = modelBytes.get(rel);
@@ -230,18 +288,21 @@ async function makeSession(url, ep, onS) {
 }
 
 // ------------------------------------------------------------------ geometry
+// iou: Intersection-over-union of two boxes, used by NMS and tracking.
 function iou(a, b) { // boxes [x,y,w,h]
   const x1 = Math.max(a[0], b[0]), y1 = Math.max(a[1], b[1]);
   const x2 = Math.min(a[0] + a[2], b[0] + b[2]), y2 = Math.min(a[1] + a[3], b[1] + b[3]);
   const inter = Math.max(0, x2 - x1) * Math.max(0, y2 - y1);
   return inter / (a[2] * a[3] + b[2] * b[3] - inter + 1e-9);
 }
+// ioMin: Intersection over the smaller box; catches boxes nested inside others.
 function ioMin(a, b) {
   const x1 = Math.max(a[0], b[0]), y1 = Math.max(a[1], b[1]);
   const x2 = Math.min(a[0] + a[2], b[0] + b[2]), y2 = Math.min(a[1] + a[3], b[1] + b[3]);
   const inter = Math.max(0, x2 - x1) * Math.max(0, y2 - y1);
   return inter / (Math.min(a[2] * a[3], b[2] * b[3]) + 1e-9);
 }
+// nms: Non-maximum suppression: removes duplicate detections of the same person.
 function nms(dets, thr = 0.45, minThr = 0) { // dets: {box, score}
   dets.sort((a, b) => b.score - a.score); const keep = [];
   for (const d of dets) {
@@ -263,10 +324,22 @@ const grayCanvas = document.createElement('canvas');
 const grayCtx = grayCanvas.getContext('2d', { willReadFrequently: true });
 
 // ------------------------------------------------------------------ YOLOX detector
+// YoloxDetector: YOLOX person detector running locally through onnxruntime-web.
+// Why these APIs: CanvasRenderingContext2D.drawImage: copies/scales the current video frame into a canvas (GPU-
+//   accelerated in browsers); getImageData: reads raw RGBA pixels for model input or signal processing;
+//   onnxruntime-web (ort): runs the ONNX model in the browser (WebGPU/WASM) so inference stays on-device.
 class YoloxDetector {
+  // constructor: Sets up the detector for the nano or tiny model.
   constructor(kind) { this.kind = kind; this.session = null; this.ep = null; this.name = 'YOLOX-' + (kind === 'tiny' ? 'Tiny' : 'Nano'); this.lastMs = 0; this.gain = 1; }
+  // url: Model file URL for this detector.
   get url() { return abs(`models/yolox_${this.kind}_person_w8.onnx`); }
+  // load: Loads the model, trying WebGPU first then WASM.
+  // Why these APIs: onnxruntime-web (ort): runs the ONNX model in the browser (WebGPU/WASM) so inference stays on-
+  //   device.
   async load(backendPref, onStatus) {
+    // tryEp: Attempts one execution provider and reports which one worked.
+    // Why these APIs: onnxruntime-web (ort): runs the ONNX model in the browser (WebGPU/WASM) so inference stays on-
+    //   device.
     const tryEp = async ep => {
       onStatus && onStatus(`Loading ${this.name} (${ep})…`);
       const t0 = now(); const s = await makeSession(this.url, ep, onStatus);
@@ -296,11 +369,16 @@ class YoloxDetector {
     return this;
   }
   // regions: [{x,y,w,h}] in frameCanvas coords; size = long side of the network input
+  // detect: Runs detection over each region (tiles/zoom) and merges results.
   async detect(regions, size) {
     const all = [];
     for (const r of regions) for (const d of await this.runRegion(r, size)) all.push(d);
     return regions.length > 1 ? nms(all, 0.5, 0.75) : all;
   }
+  // runRegion: Letterboxes one region, runs the model, decodes and rescales boxes.
+  // Why these APIs: CanvasRenderingContext2D.drawImage: copies/scales the current video frame into a canvas (GPU-
+  //   accelerated in browsers); getImageData: reads raw RGBA pixels for model input or signal processing;
+  //   onnxruntime-web (ort): runs the ONNX model in the browser (WebGPU/WASM) so inference stays on-device.
   async runRegion(r, size) {
     const long = Math.max(r.w, r.h), sc = size / long;
     const inW = Math.max(32, Math.ceil(r.w * sc / 32) * 32), inH = Math.max(32, Math.ceil(r.h * sc / 32) * 32);
@@ -333,9 +411,18 @@ class YoloxDetector {
 }
 
 // ------------------------------------------------------------------ coco-ssd fallback (CDN, needs internet)
+// CocoSsdDetector: Fallback detector (TensorFlow.js coco-ssd from the internet) used only if ONNX Runtime is
+// unavailable.
+// Why these APIs: canvas.getContext: gets a 2D/WebGL drawing context for frames and overlays;
+//   CanvasRenderingContext2D.drawImage: copies/scales the current video frame into a canvas (GPU-accelerated in
+//   browsers); document.createElement: builds UI elements at runtime.
 class CocoSsdDetector {
+  // constructor: Initializes the fallback detector.
   constructor() { this.name = 'coco-ssd'; this.ep = 'tfjs'; this.lastMs = 0; this.gain = 1; }
+  // loadScript: Injects a script tag and resolves when it loads.
+  // Why these APIs: document.createElement: builds UI elements at runtime.
   loadScript(src) { return new Promise((res, rej) => { const s = document.createElement('script'); s.src = src; s.onload = res; s.onerror = () => rej(new Error('Script blocked/unreachable: ' + src)); document.head.appendChild(s); }); }
+  // load: Loads TF.js and coco-ssd (needs internet; reported in the status bar).
   async load(_, onStatus) {
     onStatus && onStatus('Loading coco-ssd fallback (internet)…');
     if (!window.tf) await this.loadScript('https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js');
@@ -343,6 +430,10 @@ class CocoSsdDetector {
     await tf.setBackend('webgl').catch(() => tf.setBackend('cpu')); await tf.ready();
     this.model = await cocoSsd.load({ base: 'lite_mobilenet_v2' }); this.ep = 'tfjs-' + tf.getBackend(); return this;
   }
+  // detect: Runs coco-ssd on each region and keeps person boxes.
+  // Why these APIs: canvas.getContext: gets a 2D/WebGL drawing context for frames and overlays;
+  //   CanvasRenderingContext2D.drawImage: copies/scales the current video frame into a canvas (GPU-accelerated in
+  //   browsers); document.createElement: builds UI elements at runtime.
   async detect(regions) {
     const t0 = now(); const out = [];
     for (const r of regions) {
@@ -357,8 +448,14 @@ class CocoSsdDetector {
 }
 
 // ------------------------------------------------------------------ Re-ID (OSNet x0.5)
+// ReID: OSNet re-identification model: turns a person crop into an appearance embedding.
+// Why these APIs: CanvasRenderingContext2D.drawImage: copies/scales the current video frame into a canvas (GPU-
+//   accelerated in browsers); getImageData: reads raw RGBA pixels for model input or signal processing;
+//   onnxruntime-web (ort): runs the ONNX model in the browser (WebGPU/WASM) so inference stays on-device.
 class ReID {
+  // constructor: Initializes the re-ID model holder.
   constructor() { this.session = null; this.ok = false; this.lastMs = 0; this.name = 'OSNet-x0.5'; }
+  // load: Loads the OSNet ONNX model on the best available backend.
   async load(ep, onStatus) {
     const note = onStatus || (() => {});
     const url = abs(REID_REL);
@@ -366,6 +463,10 @@ class ReID {
     catch (e) { if (ep === 'wasm') throw e; logErr('reid-' + ep, e); this.session = await makeSession(url, 'wasm', note); this.ep = 'wasm'; await this.embed([[0, 0, 8, 16]]); }
     this.ok = true; return this;
   }
+  // embed: Crops each box to 128x256, normalizes and returns one embedding per person.
+  // Why these APIs: CanvasRenderingContext2D.drawImage: copies/scales the current video frame into a canvas (GPU-
+  //   accelerated in browsers); getImageData: reads raw RGBA pixels for model input or signal processing;
+  //   onnxruntime-web (ort): runs the ONNX model in the browser (WebGPU/WASM) so inference stays on-device.
   async embed(boxes) { // boxes in frameCanvas coords -> L2-normalized Float32Array[512]
     const n = boxes.length, HW = 128 * 256; const t = new Float32Array(n * 3 * HW);
     const mean = [0.485, 0.456, 0.406], std = [0.229, 0.224, 0.225];
@@ -391,7 +492,9 @@ class ReID {
     return out;
   }
 }
+// dot: Dot product (cosine similarity for normalized embeddings).
 const dot = (a, b) => { let s = 0; for (let i = 0; i < a.length; i++) s += a[i] * b[i]; return s; };
+// meanEmb: Average of a list of embeddings, re-normalized.
 function meanEmb(list) {
   const D = list[0].length, m = new Float32Array(D);
   for (const v of list) for (let i = 0; i < D; i++) m[i] += v[i];
@@ -401,13 +504,16 @@ function meanEmb(list) {
 
 // ------------------------------------------------------------------ Kalman filter (ByteTrack xyah model; F,Q,R are per-dimension so it splits into 4 exact 2x2 filters)
 const WP = 1 / 20, WV = 1 / 160;
+// KF: 8-state constant-velocity Kalman filter for one track (ByteTrack style).
 class KF {
+  // constructor: Initializes state and covariance from a first box.
   constructor(xyah) {
     const h = xyah[3];
     this.x = [...xyah, 0, 0, 0, 0];
     const sp = [2 * WP * h, 2 * WP * h, 1e-2, 2 * WP * h], sv = [10 * WV * h, 10 * WV * h, 1e-5, 10 * WV * h];
     this.P = [0, 1, 2, 3].map(i => [sp[i] * sp[i], 0, sv[i] * sv[i]]); // [Ppp, Ppv, Pvv]
   }
+  // predict: Predicts the next box position from velocity.
   predict(tracked) {
     if (!tracked) this.x[7] = 0;
     const h = this.x[3];
@@ -418,6 +524,7 @@ class KF {
       this.P[i] = [pp + 2 * pv + vv + qp[i] * qp[i], pv + vv, vv + qv[i] * qv[i]];
     }
   }
+  // update: Corrects the state with a matched detection.
   update(z) {
     const h = this.x[3]; const r = [WP * h, WP * h, 1e-1, WP * h];
     for (let i = 0; i < 4; i++) {
@@ -427,15 +534,20 @@ class KF {
       this.P[i] = [(1 - kp) * pp, (1 - kp) * pv, vv - kv * pv];
     }
   }
+  // shift: Shifts the state by camera motion so tracks follow when the phone moves.
   shift(dx, dy) { this.x[0] += dx; this.x[1] += dy; }
 }
+// toXYAH: Converts a box to center/aspect/height form for the filter.
 const toXYAH = b => [b[0] + b[2] / 2, b[1] + b[3] / 2, b[2] / b[3], b[3]];
+// fromXYAH: Converts filter state back to a box.
 const fromXYAH = x => { const h = Math.max(1, x[3]), w = x[2] * h; return [x[0] - w / 2, x[1] - h / 2, w, h]; };
 
 // ------------------------------------------------------------------ Hungarian (min-cost, rectangular; pairs above thresh rejected)
+// hungarian: Optimal assignment of tracks to detections (Hungarian algorithm) with a cost cutoff.
 function hungarian(cost, thresh) {
   const nR = cost.length; if (!nR) return []; const nC = cost[0].length; if (!nC) return [];
   const tr = nR > nC; const n = tr ? nC : nR, m = tr ? nR : nC;
+  // a: Cost lookup helper inside the assignment.
   const a = (i, j) => { const v = tr ? cost[j][i] : cost[i][j]; return v > thresh ? thresh + 1 : v; };
   const INF = 1e18, u = new Float64Array(n + 1), v = new Float64Array(m + 1), p = new Int32Array(m + 1), way = new Int32Array(m + 1);
   for (let i = 1; i <= n; i++) {
@@ -462,20 +574,30 @@ function hungarian(cost, thresh) {
 
 // ------------------------------------------------------------------ ByteTrack
 let TRACK_ID = 1;
+// STrack: One tracked person: box, Kalman filter, hits, embeddings.
 class STrack {
+  // constructor: Creates a track from a detection.
   constructor(box, score) { this.box = box; this.detBox = box; this.score = score; this.id = 0; this.state = 1; this.activated = false;
     this.hits = 0; this.startT = now(); this.lastT = now(); this.personId = 0; this.emb = []; this.lastEmbT = 0; this.waitFrames = 0; this.matchedThisFrame = true; this.co = new Set(); this.hiHits = score >= CFG.trackHigh ? 1 : 0; this.pend = 0; }
+  // activate: Marks the track confirmed.
   activate() { this.kf = new KF(toXYAH(this.box)); this.id = TRACK_ID++; this.state = 1; this.hits = 1; }
+  // predict: Advances the track's Kalman prediction.
   predict() { this.kf.predict(this.state === 1); this.box = fromXYAH(this.kf.x); }
+  // update: Updates the track with a matched detection.
   update(det) {
     this.kf.update(toXYAH(det.box)); this.box = fromXYAH(this.kf.x); this.detBox = det.box; this.score = det.score; if (det.score >= CFG.trackHigh) this.hiHits = (this.hiHits || 0) + 1;
     this.state = 1; this.activated = true; this.hits++; this.lastT = now(); this.matchedThisFrame = true;
   }
 }
+// ByteTracker: ByteTrack multi-object tracker: matches high then low confidence detections to tracks.
 class ByteTracker {
+  // constructor: Creates an empty tracker.
   constructor() { this.reset(); }
+  // reset: Clears all tracks.
   reset() { this.tracked = []; this.lost = []; this.frame = 0; }
+  // cost: Builds the track-to-detection cost matrix (IoU, optionally fused with appearance).
   cost(tracks, dets, fuse) { return tracks.map(t => dets.map(d => 1 - iou(t.box, d.box) * (fuse ? d.score : 1))); }
+  // update: One tracking step: predict, match, create and retire tracks.
   update(dets, motion) {
     this.frame++;
     const tNow = now();
@@ -507,9 +629,17 @@ class ByteTracker {
 }
 
 // ------------------------------------------------------------------ camera-motion compensation: sparse block matching on a 160-px gray frame, people masked out
+// MotionEstimator: Estimates camera motion and scene brightness from a tiny downscaled frame (cheap, no model).
+// Why these APIs: CanvasRenderingContext2D.drawImage: copies/scales the current video frame into a canvas (GPU-
+//   accelerated in browsers); getImageData: reads raw RGBA pixels for model input or signal processing.
 class MotionEstimator {
+  // constructor: Creates the estimator.
   constructor() { this.prev = null; this.W = 160; this.last = { dx: 0, dy: 0, conf: 0, n: 0 }; this.luma = 128; }
+  // reset: Forgets the previous frame.
   reset() { this.prev = null; }
+  // estimate: Computes global shift and luma stats from a small grayscale copy of the frame.
+  // Why these APIs: CanvasRenderingContext2D.drawImage: copies/scales the current video frame into a canvas (GPU-
+  //   accelerated in browsers); getImageData: reads raw RGBA pixels for model input or signal processing.
   estimate(srcW, srcH, masks, doMotion) {
     const W = this.W, H = Math.max(16, Math.round(srcH * W / srcW));
     if (grayCanvas.width !== W || grayCanvas.height !== H) { grayCanvas.width = W; grayCanvas.height = H; this.prev = null; }
@@ -518,6 +648,7 @@ class MotionEstimator {
     let sum = 0; const hist = new Uint32Array(256);
     for (let i = 0, j = 0; i < W * H; i++, j += 4) { const v = 0.299 * px[j] + 0.587 * px[j + 1] + 0.114 * px[j + 2]; g[i] = v; sum += v; hist[v | 0]++; }
     // robust brightness of the real camera pixels (this is the raw video frame, no letterbox padding)
+    // pct: Percentile helper for luma statistics.
     const pct = q => { let acc = 0; const lim = q * W * H; for (let k = 0; k < 256; k++) { acc += hist[k]; if (acc >= lim) return k; } return 255; };
     this.luma = sum / (W * H); this.lumaMed = pct(0.5); this.lumaP98 = pct(0.98);
     const prev = this.prev; this.prev = g;
@@ -540,6 +671,7 @@ class MotionEstimator {
       if (best < second * 0.9) votes.push([bdx, bdy]);
     }
     if (votes.length < 5) return (this.last = { dx: 0, dy: 0, conf: 0, n: votes.length });
+    // med: Median helper.
     const med = arr => { const s = [...arr].sort((a, b) => a - b); return s[s.length >> 1]; };
     const mdx = med(votes.map(v => v[0])), mdy = med(votes.map(v => v[1]));
     const inl = votes.filter(v => Math.abs(v[0] - mdx) <= 1 && Math.abs(v[1] - mdy) <= 1);
@@ -551,19 +683,29 @@ class MotionEstimator {
 }
 
 // ------------------------------------------------------------------ session ledger (persistent personIds; never forgets a counted person)
+// Ledger: Ledger of unique people: galleries of embeddings, merges and duplicate suspects.
 class Ledger {
+  // constructor: Creates an empty ledger.
   constructor() { this.reset(); }
+  // reset: Clears all people.
   reset() { this.persons = new Map(); this.nextId = 1; this.events = []; this.ghosts = 0; }
+  // create: Adds a person record (unique, possible duplicate or unverified).
   create(state, emb, thumb, candidate = null, candSim = 0) {
     const p = { id: this.nextId++, state, gallery: emb ? [emb] : [], thumb: null, candidate, candSim, mergedInto: null, created: now(), resolved: false, coSeen: new Map() }; // coSeen: personId -> frames seen together
     this.persons.set(p.id, p); this.events.push({ t: Date.now(), type: 'new:' + state, id: p.id, candidate, candSim });
     return p;
   }
+  // root: Follows merge links to the surviving person record.
   root(id) { let p = this.persons.get(id); while (p && p.mergedInto) p = this.persons.get(p.mergedInto); return p; }
+  // live: People not merged away.
   live() { return [...this.persons.values()].filter(p => !p.mergedInto); }
+  // unique: Count of confirmed unique people.
   get unique() { let n = 0; for (const p of this.persons.values()) if (!p.mergedInto) n++; return n; }
+  // possible: Count of possible duplicates.
   get possible() { let n = 0; for (const p of this.persons.values()) if (!p.mergedInto && p.state === 'possible') n++; return n; }
+  // unverified: Count of people not yet verified.
   get unverified() { let n = 0; for (const p of this.persons.values()) if (!p.mergedInto && p.state === 'unverified') n++; return n; }
+  // addSample: Adds an embedding sample to a person's gallery (bounded size).
   addSample(p, emb) { // bounded samples per person, unbounded people
     if (!emb) return;
     if (p.state === 'unverified') p.state = 'new';
@@ -571,23 +713,29 @@ class Ledger {
     let bi = -1, bs = -1; p.gallery.forEach((g, i) => { const s = dot(g, emb); if (s > bs) { bs = s; bi = i; } });
     if (bs > 0.97) return; p.gallery[bi] = emb; // replace the most redundant neighbour, keep the rest diverse
   }
+  // sim: Best similarity between an embedding and a person's gallery.
   sim(p, emb) { // mean of the top-2 sample similarities
     if (!p.gallery.length) return -1;
     const s = p.gallery.map(g => dot(g, emb)).sort((a, b) => b - a);
     return s.length > 1 ? (s[0] + s[1]) / 2 : s[0];
   }
+  // best: Finds the most similar known person.
   best(emb, exclude) {
     let best = null, bs = -1;
     for (const p of this.live()) { if (exclude.has(p.id)) continue; const s = this.sim(p, emb); if (s > bs) { bs = s; best = p; } }
     return { p: best, s: bs };
   }
+  // coCount: How often two people were seen in the same frame.
   coCount(a, b) { return Math.max(a.coSeen.get(b.id) || 0, b.coSeen.get(a.id) || 0); }
+  // together: True if two people appeared together (so they cannot be the same person).
   together(a, b) { return this.coCount(a, b) >= 3; } // >=3 verified frames together = different people
+  // gsim: Gallery-to-gallery similarity.
   gsim(a, b) { // gallery-to-gallery similarity: mean of the best match of each of a's samples (robust to one odd crop)
     if (!a.gallery.length || !b.gallery.length) return -1;
     const v = a.gallery.map(g => this.sim(b, g)).sort((x, y) => y - x); const k = Math.max(1, Math.ceil(v.length / 2));
     return v.slice(0, k).reduce((x, y) => x + y, 0) / k;
   }
+  // dropGhosts: Drops short-lived records that were never confirmed (ghost detections).
   dropGhosts() { // a "person" seen for a split second and then gone is almost always a noise / fragment box
     let n = 0; const t = now();
     for (const p of this.live()) {
@@ -596,6 +744,7 @@ class Ledger {
     }
     return n;
   }
+  // reconcile: Periodically merges records that look like the same person.
   reconcile(held) { // retroactive de-fragmentation: a recently created person whose whole gallery matches an earlier one is the same person
     let n = this.dropGhosts(); const L = this.live(); const recent = now() - 30000;
     for (const a of L) {
@@ -608,6 +757,7 @@ class Ledger {
     }
     return n;
   }
+  // merge: Merges one person record into another and records why.
   merge(fromId, intoId, why, force) {
     const a = this.root(fromId), b = this.root(intoId); if (!a || !b || a === b) return null;
     if (!force && this.together(a, b)) return null; // seen in the same frame = provably different people
@@ -620,6 +770,7 @@ class Ledger {
 // ------------------------------------------------------------------ camera manager (one active stream; lenses are sequential modes)
 const video = $('video'), canvas = $('canvas'), ctx = canvas.getContext('2d');
 const cam = { stream: null, track: null, devices: [], current: null, facing: 'environment', caps: {}, nativeZoom: false, torchOn: false, digitalZoom: 1, label: '—', lensKind: 'unknown' };
+// lensKindOf: Classifies a camera label as wide/ultra-wide/tele.
 function lensKindOf(label) {
   const l = (label || '').toLowerCase();
   if (/front|user|facetime|facing front/.test(l)) return 'front';
@@ -629,6 +780,10 @@ function lensKindOf(label) {
   if (/back|rear|wide|environment|facing back/.test(l)) return 'wide';
   return 'unknown';
 }
+// enumerateCams: Lists cameras and fills the lens picker.
+// Why these APIs: mediaDevices.enumerateDevices: lists cameras so the user can pick front/back;
+//   document.createElement: builds UI elements at runtime; innerHTML: renders a block of markup in one write
+//   (inputs are built by the app); textContent: sets text safely without HTML parsing.
 async function enumerateCams() {
   try {
     const ds = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput');
@@ -639,7 +794,11 @@ async function enumerateCams() {
   for (const d of cam.devices) { const o = document.createElement('option'); o.value = d.label; o.textContent = `${d.label} [${d.kind}]`; sel.appendChild(o); }
   sel.value = cam.label && cam.devices.some(d => d.label === cam.label) ? cam.label : '';
 }
+// rearByKind: Finds the rear camera of a given lens kind.
 const rearByKind = kind => cam.devices.find(d => d.kind === kind);
+// openCamera: Opens the chosen camera at the best resolution and reads its real settings.
+// Why these APIs: navigator.mediaDevices.getUserMedia: opens the camera stream locally; frames never leave the
+//   device; MediaStreamTrack.getCapabilities/getSettings: reads what the camera actually supports/delivers.
 async function openCamera(opts = {}) {
   if (cam.stream) cam.stream.getTracks().forEach(t => t.stop());
   cam.stream = null;
@@ -671,6 +830,10 @@ async function openCamera(opts = {}) {
   setDigitalZoom(1); updateZoomLabel();
   return true;
 }
+// setZoom: Applies optical zoom when the camera supports it, else digital zoom.
+// Why these APIs: MediaStreamTrack.applyConstraints: changes resolution/zoom on the live track without reopening
+//   the camera; MediaStreamTrack.getCapabilities/getSettings: reads what the camera actually supports/delivers;
+//   setTimeout: defers or delays work without blocking.
 async function setZoom(z) {
   z = +z;
   if (cam.nativeZoom) {
@@ -685,8 +848,14 @@ async function setZoom(z) {
   }
   setDigitalZoom(clamp(z, 1, 4)); updateZoomLabel(); markLensChange('digital zoom ' + z);
 }
+// setDigitalZoom: Sets digital (crop) zoom.
 function setDigitalZoom(z) { cam.digitalZoom = z; $('stage').style.transform = z > 1.001 ? `scale(${z})` : ''; }
+// updateZoomLabel: Updates the zoom label.
+// Why these APIs: textContent: sets text safely without HTML parsing.
 function updateZoomLabel() { $('zoomVal').textContent = `${(+$('zoom').value).toFixed(1)}×${cam.nativeZoom ? '' : ' dig'}`; }
+// toggleTorch: Toggles the flashlight where supported.
+// Why these APIs: MediaStreamTrack.applyConstraints: changes resolution/zoom on the live track without reopening
+//   the camera.
 async function toggleTorch() {
   try { cam.torchOn = !cam.torchOn; await cam.track.applyConstraints({ advanced: [{ torch: cam.torchOn }] });
     $('torchBtn').style.color = cam.torchOn ? 'var(--warn)' : ''; }
@@ -695,7 +864,11 @@ async function toggleTorch() {
 
 // ------------------------------------------------------------------ dense crowd estimator (DM-Count in a worker; tiled-detection fallback)
 const dense = { worker: null, ready: false, failed: false, busy: false, starting: false, est: null, estAt: 0, map: null, mapW: 0, mapH: 0, source: '', ms: 0, peak: 0, active: false, autoSince: 0, err: '', reqAt: 0 };
+// denseModelEnabled: True when the optional dense crowd model is enabled in settings.
 function denseModelEnabled() { return S.dense === 'on'; }
+// startDenseWorker: Starts the dense-count worker so the heavy model never blocks the UI.
+// Why these APIs: Web Worker: moves heavy computation off the UI thread so the page stays responsive;
+//   postMessage: passes data between the page and a worker/service worker.
 function startDenseWorker() {
   if (dense.worker || dense.failed || dense.starting) return;
   // The 21 MB density model is fetched only when the user turns dense mode On. Auto keeps the tiled estimate.
@@ -710,12 +883,14 @@ function startDenseWorker() {
       if (!denseModelEnabled()) { banner('dense-dl'); return; }
       banner('dense-dl');
       dense.worker = new Worker('dense-worker.js'); dense.startAt = now();
+      // dense.worker.onmessage: Receives dense estimates from the worker.
       dense.worker.onmessage = e => {
         const m = e.data;
         if (m.type === 'ready') { dense.ready = true; dense.ep = m.ep; }
         else if (m.type === 'error') { dense.busy = false; dense.failed = true; dense.err = m.error; banner('dense', 'Density model failed (' + m.error + ') — using a tiled-detection estimate instead.', 'warn'); }
         else if (m.type === 'result') { dense.busy = false; dense.est = m.count; dense.estAt = now(); dense.map = m.map; dense.mapW = m.w; dense.mapH = m.h; dense.ms = m.ms; dense.source = 'density'; dense.peak = Math.max(dense.peak, m.count); }
       };
+      // dense.worker.onerror: Disables dense mode if the worker fails.
       dense.worker.onerror = e => { dense.failed = true; dense.err = e.message || 'worker error'; banner('dense', 'Density worker could not start — using a tiled-detection estimate.', 'warn'); };
       const modelBytesCopy = bytes.slice(0);
       dense.worker.postMessage({ type: 'init', base: abs('./'), maxPages: globalThis.__ortMaxPages, wasmBinary: ortWasmBytes || undefined, modelBytes: modelBytesCopy, eps: dense.eps || (Q.get('denseEp') ? [Q.get('denseEp')] : ['webgpu', 'wasm']) }, [modelBytesCopy.buffer]);
@@ -725,6 +900,11 @@ function startDenseWorker() {
     } finally { dense.starting = false; }
   })();
 }
+// requestDense: Sends a downscaled frame to the dense worker when it is idle.
+// Why these APIs: canvas.getContext: gets a 2D/WebGL drawing context for frames and overlays;
+//   CanvasRenderingContext2D.drawImage: copies/scales the current video frame into a canvas (GPU-accelerated in
+//   browsers); getImageData: reads raw RGBA pixels for model input or signal processing; postMessage: passes
+//   data between the page and a worker/service worker; document.createElement: builds UI elements at runtime.
 function requestDense() {
   if (dense.busy && now() - dense.reqAt > 15000) { // stuck (e.g. a very slow GPU): restart the worker on the CPU
     try { dense.worker.terminate(); } catch (e) {}
@@ -750,10 +930,13 @@ let detector = null, reid = null, running = false, loopGen = 0, loadedKey = '';
 const st = { fps: 0, lastFrameT: 0, inFrame: 0, size: 640, tiles: false, noDetSince: 0, smallSince: 0, lumaEma: -1, light: 'ok',
   pauseUntil: 0, lastLensSwitch: 0, csv: [], lastCsv: 0, timings: {}, lastDets: 0, crowdedness: 0, ladder: '', tiledEstAt: 0, reidQueue: 0, frames: 0 };
 window.__tc = { st, ledger, tracker, dense, cam, S, CFG, loadDiag, assetFrom, CACHE_NAME, VERSION, ASSET_BASE,
+  // detector: Current detector instance.
   get detector() { return detector; }, get reid() { return reid; }, get running() { return running; },
   denseModelEnabled };
 
+// confirmFrames: Frames a track must persist before it counts.
 function confirmFrames() { return Math.max(1, S.confirm | 0); } // same in all light: register people as soon as they are seen; late de-dup cleans extras
+// markLensChange: Pauses identity decisions briefly after a lens change so people are not double counted.
 function markLensChange(why) {
   // coordinates break on a lens/zoom change: drop tracks (ledger keeps everyone), pause counting decisions briefly, re-match by appearance
   const vis = tracker.tracked.filter(t => t.matchedThisFrame && t.personId).map(t => ledger.root(t.personId)).filter(Boolean).map(p => p.id);
@@ -763,10 +946,12 @@ function markLensChange(why) {
 }
 
 let modelsPromise = null, reidLoading = null;
+// ensureModels: Loads models once and shares the promise.
 function ensureModels() {
   if (!modelsPromise) modelsPromise = loadModels().catch(err => { modelsPromise = null; throw err; });
   return modelsPromise;
 }
+// kickReid: Loads re-ID lazily after the detector is ready.
 function kickReid() {
   if (reid || reidLoading || !(detector instanceof YoloxDetector)) return;
   const ep = detector.ep;
@@ -782,12 +967,14 @@ function kickReid() {
     } finally { modelBytes.delete(REID_REL); reidLoading = null; }
   })();
 }
+// loadModels: Loads the selected detector with status updates.
 async function loadModels() {
   const want = S.model;
   const kind = await detectorKind();
   const key = want + '|' + S.backend + '|' + kind;
   if (detector && loadedKey === key) { kickReid(); return; }
   detector = null; reid = null;
+  // onS: Status callback during model load.
   const onS = m => { if (!running) status(m, 'running'); };
   let ortOk = false;
   if (want !== 'cocossd') {
@@ -833,6 +1020,7 @@ async function loadModels() {
 }
 
 // ---------------------------------------------------------------- per-frame processing
+// regionsFor: Splits the frame into detection regions (tiles at high zoom/crowds).
 function regionsFor(W, H) {
   const z = cam.digitalZoom, cw = W / z, ch = H / z;
   const base = { x: (W - cw) / 2, y: (H - ch) / 2, w: cw, h: ch };
@@ -847,16 +1035,23 @@ function regionsFor(W, H) {
 // Frame grab. Some iOS versions return an all-black image when a camera <video> is drawn into a canvas that was
 // created with willReadFrequently (CPU canvas). If frames read as pure black while the video plays, try other paths.
 const GRAB_MODES = ['canvas (CPU)', 'canvas (GPU)', 'ImageBitmap'];
+// grabFrame: Copies the current video frame into the working canvas.
+// Why these APIs: CanvasRenderingContext2D.drawImage: copies/scales the current video frame into a canvas (GPU-
+//   accelerated in browsers); createImageBitmap: decodes/crops frames asynchronously without blocking the UI.
 async function grabFrame(W, H) {
   if (st.grabMode === 2 && typeof createImageBitmap === 'function') {
     const bm = await createImageBitmap(video); frameCtx.drawImage(bm, 0, 0, W, H); bm.close && bm.close();
   } else frameCtx.drawImage(video, 0, 0, W, H);
 }
+// setGrabMode: Switches frame-grab method when the faster path fails.
+// Why these APIs: canvas.getContext: gets a 2D/WebGL drawing context for frames and overlays;
+//   document.createElement: builds UI elements at runtime.
 function setGrabMode(m) {
   st.grabMode = m; const W = frameCanvas.width, H = frameCanvas.height;
   frameCanvas = document.createElement('canvas'); frameCanvas.width = W; frameCanvas.height = H;
   frameCtx = frameCanvas.getContext('2d', m === 1 ? {} : { willReadFrequently: true });
 }
+// updateLight: Detects too-dark / covered camera and warns.
 function updateLight(mo) {
   const tNow = now(), black = mo.lumaP98 <= CFG.blackLuma;
   st.lumaMed = mo.lumaMed; st.lumaP98 = mo.lumaP98; st.lumaMean = mo.luma;
@@ -875,6 +1070,7 @@ function updateLight(mo) {
   if (!st.lightPendSince || st.lightPend !== want) { st.lightPend = want; st.lightPendSince = tNow; }
   if (tNow - st.lightPendSince >= (want === 'ok' ? CFG.lightExitMs : CFG.lightEnterMs)) { st.light = want; st.lightPendSince = 0; if (want !== 'ok') st.everDark = true; }
 }
+// step: One processing step: grab, detect, track, identify, update UI.
 async function step() {
   const T = {}; let t0 = now();
   const W = video.videoWidth, H = video.videoHeight;
@@ -904,6 +1100,7 @@ async function step() {
   const tf = now(); if (st.lastFrameT) st.fps = st.fps ? st.fps * 0.8 + 0.2 * (1000 / (tf - st.lastFrameT)) : 1000 / (tf - st.lastFrameT); st.lastFrameT = tf;
   if (S.size === 'auto' && detector instanceof YoloxDetector) adaptSize(T.det / regs.length);
 }
+// adaptSize: Adapts model input size to keep frame time within budget (saves battery on slow phones).
 function adaptSize(msPerRegion) {
   const sizes = [416, 512, 640, 800];
   let i = sizes.indexOf(st.size); if (i < 0) i = 1;
@@ -913,6 +1110,7 @@ function adaptSize(msPerRegion) {
 }
 
 // ---------------------------------------------------------------- identity decisions (trackId -> persistent personId)
+// cropQuality: Scores how usable a person crop is (size, occlusion, edge).
 function cropQuality(t, others, W, H) {
   const b = t.detBox || t.box;
   if (b[3] < CFG.reidMinH || b[2] < CFG.reidMinW) return 0;
@@ -923,7 +1121,9 @@ function cropQuality(t, others, W, H) {
   if ((t.score || 0.5) < 0.3) return 0; // weak detection (dark noise / body fragment): appearance unreliable
   return Math.min(1, b[3] / 160) * (t.score || 0.5);
 }
+// thumbOf: Small thumbnail of a person for the duplicates list.
 function thumbOf() { return null; } // privacy: no snapshots/images are ever stored — only numeric appearance embeddings in memory
+// carryCandidate: Carries an identity across a lens switch.
 function carryCandidate(held, emb) { // after a lens/zoom switch coordinates break: treat arrivals as uncertain instead of surely new
   if (!st.carry || now() > st.carry.until) return null;
   let best = null, bs = -2;
@@ -935,6 +1135,7 @@ function carryCandidate(held, emb) { // after a lens/zoom switch coordinates bre
   if (best) st.carry.ids.delete(best.id);
   return best;
 }
+// processIdentities: Decides for each track whether it is a new person, a known one or a possible duplicate.
 async function processIdentities(tracked, W, H, dets) {
   const tNow = now(), paused = tNow < st.pauseUntil;
   const visible = tracked.filter(t => t.matchedThisFrame && t.activated);
@@ -1060,6 +1261,7 @@ async function processIdentities(tracked, W, H, dets) {
 }
 
 // ---------------------------------------------------------------- auto policies: tiling, lens ladder, dense mode
+// autoPolicies: Automatic policies (tiling, size, re-ID cadence) based on crowd size.
 function autoPolicies(hd, W, H, nAll) {
   const tNow = now(), zoneH = H / cam.digitalZoom;
   if (!hd.length) { if (!st.noDetSince) st.noDetSince = tNow; } else st.noDetSince = 0;
@@ -1097,6 +1299,7 @@ function autoPolicies(hd, W, H, nAll) {
     } else if (tNow - st.tiledEstAt > 3000) tiledEstimate();
   }
 }
+// tiledEstimate: Periodic tiled pass to estimate people too small for the main pass.
 async function tiledEstimate() { // documented fallback when the density model is unavailable: full frame + 3x3 tiles, NMS-merged
   st.tiledEstAt = now();
   if (!(detector instanceof YoloxDetector)) return;
@@ -1107,6 +1310,7 @@ async function tiledEstimate() { // documented fallback when the density model i
   dense.est = d.length; dense.estAt = now(); dense.source = 'tiled detection (lower bound)'; dense.peak = Math.max(dense.peak, d.length); dense.map = null;
 }
 let switching = false;
+// switchLens: Switches to another lens and reopens the camera.
 async function switchLens(label) {
   if (!running || switching) return;
   switching = true; running = false; loopGen++;
@@ -1116,8 +1320,13 @@ async function switchLens(label) {
 }
 
 // ---------------------------------------------------------------- drawing + UI
+// colorFor: Stable color per person for the overlay.
 function colorFor(p) { return !p ? '#9aa3b5' : p.state === 'possible' ? '#ffab40' : p.state === 'unverified' ? '#00b0ff' : '#00e676'; }
 const heatCanvas = document.createElement('canvas');
+// draw: Draws boxes and labels on the overlay canvas.
+// Why these APIs: canvas.getContext: gets a 2D/WebGL drawing context for frames and overlays;
+//   CanvasRenderingContext2D.drawImage: copies/scales the current video frame into a canvas (GPU-accelerated in
+//   browsers); putImageData: writes processed pixels back to a canvas.
 function draw() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   if (dense.active && dense.map && now() - dense.estAt < 4000) {
@@ -1139,6 +1348,8 @@ function draw() {
     ctx.fillStyle = '#000'; ctx.fillText(label, x + 4, ly - 4);
   }
 }
+// uiTick: Updates counters in the UI.
+// Why these APIs: textContent: sets text safely without HTML parsing; classList: toggles CSS state classes.
 function uiTick() {
   const u = ledger.unique, pd = ledger.possible;
   $('current').textContent = st.inFrame;
@@ -1166,7 +1377,13 @@ function uiTick() {
   if ($('debugPanel').classList.contains('visible')) renderDebug();
   if ($('dupesPanel').classList.contains('visible')) renderDupes();
 }
+// renderDebug: Renders the debug panel (timings, backend, assets).
+// Why these APIs: onnxruntime-web (ort): runs the ONNX model in the browser (WebGPU/WASM) so inference stays on-
+//   device; navigator.gpu (WebGPU): detects GPU support to pick the fastest execution provider; textContent:
+//   sets text safely without HTML parsing; JSON.stringify: serializes results into a plain string that can cross
+//   the script boundary; Intl / toLocale*: formats numbers/dates for the user locale.
 function renderDebug() {
+  // f: Formats a number for the debug panel.
   const T = st.timings, f = v => v == null ? '—' : v.toFixed(0);
   const lines = [
     `${VERSION}  secure=${window.isSecureContext} crossOriginIsolated=${!!window.crossOriginIsolated} wasmThreads=${typeof ort !== 'undefined' ? ort.env.wasm.numThreads : '—'} webgpu=${!!navigator.gpu}`,
@@ -1190,6 +1407,9 @@ function renderDebug() {
   ];
   $('debugText').textContent = lines.filter(l => l !== '').join('\n');
 }
+// renderDupes: Renders the possible-duplicates list with merge/keep buttons.
+// Why these APIs: document.createElement: builds UI elements at runtime; innerHTML: renders a block of markup in
+//   one write (inputs are built by the app); textContent: sets text safely without HTML parsing.
 function renderDupes() {
   const list = ledger.live().filter(p => p.state === 'possible');
   const sig = list.map(p => p.id + ':' + p.candidate).join(',');
@@ -1200,25 +1420,35 @@ function renderDupes() {
     const row = document.createElement('div'); row.className = 'dupe';
     row.innerHTML = `<div class="txt">P${p.id} looks like P${c ? c.id : '?'} <span style="color:var(--muted)">(compare the P-labels on screen; no snapshots are stored)</span><br><span style="color:var(--muted)">${p.why ? p.why : 'similarity ' + (p.candSim || 0).toFixed(2)}</span></div>`;
     const mb = document.createElement('button'); mb.textContent = 'Same → merge';
+    // mb.onclick: Merges a suspected duplicate into its match.
     mb.onclick = () => { ledger.merge(p.id, p.candidate, 'manual', true); for (const t of tracker.tracked) if (t.personId === p.id) t.personId = p.candidate; $('dupesList').dataset.sig = ''; uiTick(); };
     const kb = document.createElement('button'); kb.textContent = 'Different';
+    // kb.onclick: Keeps a suspected duplicate as a separate person.
     kb.onclick = () => { p.state = 'new'; p.resolved = true; ledger.events.push({ t: Date.now(), type: 'resolve-new', id: p.id, why: 'manual' }); $('dupesList').dataset.sig = ''; uiTick(); };
     row.appendChild(mb); row.appendChild(kb); $('dupesList').appendChild(row);
   }
 }
+// window.__tc.mergePossible: Test hook to merge a possible duplicate.
 window.__tc.mergePossible = (id) => { const p = ledger.persons.get(id); if (p && p.state === 'possible') { ledger.merge(p.id, p.candidate, 'manual', true); return true; } return false; };
 
 // ---------------------------------------------------------------- CSV log (1 row/second)
+// csvTick: Appends a CSV row once per second while running.
 function csvTick() {
   if (!running || Date.now() - st.lastCsv < 1000) return;
   st.lastCsv = Date.now();
   st.csv.push([new Date().toISOString(), st.inFrame, ledger.unique, ledger.possible, dense.active && dense.est != null ? (+dense.est).toFixed(1) : '',
     cam.lensKind + (cam.digitalZoom > 1 ? `@${cam.digitalZoom.toFixed(1)}x` : ''), ledger.unique - ledger.possible, ledger.unverified, st.light, detector ? detector.ep : '', st.fps.toFixed(1)]);
 }
+// csvText: Builds the CSV text of the session.
 function csvText() {
   const head = 'timestamp,in_frame,unique,possible_dupes,estimated_crowd,lens,unique_low,unverified,light,backend,fps';
   return head + '\n' + st.csv.map(r => r.join(',')).join('\n') + '\n';
 }
+// exportCsv: Downloads the session CSV locally.
+// Why these APIs: URL.createObjectURL: turns in-memory data into a URL the page can load without a server;
+//   URL.revokeObjectURL: frees the memory held by an object URL; Blob: packages bytes for download or object
+//   URLs; setTimeout: defers or delays work without blocking; document.createElement: builds UI elements at
+//   runtime; element.click(): triggers the same action a user tap would.
 function exportCsv() {
   const txt = csvText(); window.__lastCsv = txt;
   const blob = new Blob([txt], { type: 'text/csv' });
@@ -1230,8 +1460,13 @@ window.__tc.csvText = csvText;
 
 // ---------------------------------------------------------------- loop
 let rafId = 0;
+// render: Schedules a redraw on the next display frame.
+// Why these APIs: requestAnimationFrame: syncs work to the display refresh and pauses automatically in
+//   background tabs (saves battery).
 function render() { draw(); rafId = requestAnimationFrame(render); }
 setInterval(() => { uiTick(); csvTick(); }, 250);
+// loop: Main processing loop; yields between steps so the UI stays responsive.
+// Why these APIs: setTimeout: defers or delays work without blocking.
 async function loop(gen) {
   while (running && gen === loopGen) {
     if (video.readyState < 2 || !video.videoWidth) { await new Promise(r => setTimeout(r, 100)); continue; }
@@ -1240,9 +1475,13 @@ async function loop(gen) {
     await new Promise(r => setTimeout(r, 0));
   }
 }
+// startLoop: Starts a new loop generation (old loops exit).
 function startLoop() { loopGen++; const g = loopGen; loop(g); if (!rafId) render(); status('Counting people…', 'running'); }
 
 // ---------------------------------------------------------------- controls
+// $('startBtn').onclick: Start button: loads models, opens the camera, starts counting.
+// Why these APIs: navigator.mediaDevices.getUserMedia: opens the camera stream locally; frames never leave the
+//   device; textContent: sets text safely without HTML parsing.
 $('startBtn').onclick = async () => {
   $('startBtn').disabled = true; status('Starting…', 'running');
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { status('Camera API unavailable (needs 127.0.0.1 or https)', 'error'); $('startBtn').disabled = false; return; }
@@ -1256,6 +1495,9 @@ $('startBtn').onclick = async () => {
   $('stopBtn').disabled = false; $('switchBtn').disabled = false; $('startBtn').textContent = 'Running…';
   startLoop();
 };
+// $('stopBtn').onclick: Stop button: stops the loop and camera and shows results.
+// Why these APIs: innerHTML: renders a block of markup in one write (inputs are built by the app); textContent:
+//   sets text safely without HTML parsing; classList: toggles CSS state classes.
 $('stopBtn').onclick = () => {
   running = false; loopGen++;
   try { ledger.reconcile(null); } catch (e) { logErr('reconcile', e); }
@@ -1271,6 +1513,7 @@ $('stopBtn').onclick = () => {
   $('result').classList.add('visible'); status('Stopped', '');
   $('startBtn').disabled = $('stopBtn').disabled = $('switchBtn').disabled = true;
 };
+// $('switchBtn').onclick: Switch-camera button.
 $('switchBtn').onclick = async () => {
   if (!running) return; $('switchBtn').disabled = true;
   cam.facing = cam.facing === 'environment' ? 'user' : 'environment';
@@ -1278,6 +1521,8 @@ $('switchBtn').onclick = async () => {
   try { await openCamera({}); markLensChange('flip camera'); } catch (e) { banner('cam', 'Camera switch failed: ' + (e.message || e)); }
   running = true; startLoop(); $('switchBtn').disabled = false;
 };
+// $('resetBtn').onclick: Reset button: clears counts and tracks.
+// Why these APIs: textContent: sets text safely without HTML parsing; classList: toggles CSS state classes.
 $('resetBtn').onclick = () => {
   $('result').classList.remove('visible'); tracker.reset(); ledger.reset(); motion.reset(); TRACK_ID = 1;
   dense.est = null; dense.peak = 0; dense.map = null; dense.active = false; st.csv = []; st.inFrame = 0; uiTick();
@@ -1285,19 +1530,37 @@ $('resetBtn').onclick = () => {
   $('stopBtn').disabled = $('switchBtn').disabled = true;
   status('Ready — tap Start', 'ready'); ctx.clearRect(0, 0, canvas.width, canvas.height);
 };
+// $('zoom').oninput: Zoom slider live update.
 $('zoom').oninput = () => updateZoomLabel();
+// $('zoom').onchange: Zoom slider final value.
 $('zoom').onchange = e => setZoom(e.target.value);
 $('torchBtn').onclick = toggleTorch;
 $('csvBtn').onclick = exportCsv; $('resultCsvBtn').onclick = exportCsv;
+// togglePanel: Shows/hides a panel.
+// Why these APIs: classList: toggles CSS state classes.
 const togglePanel = id => { for (const p of ['settingsPanel', 'debugPanel', 'dupesPanel', 'selfTestPanel']) if (p !== id) $(p).classList.remove('visible'); $(id).classList.toggle('visible'); uiTick(); };
+// $('settingsBtn').onclick: Opens settings.
 $('settingsBtn').onclick = () => togglePanel('settingsPanel');
+// $('debugBtn').onclick: Opens debug.
 $('debugBtn').onclick = () => togglePanel('debugPanel');
+// $('selfTestBtn').onclick: Opens self-test.
+// Why these APIs: classList: toggles CSS state classes.
 $('selfTestBtn').onclick = () => { togglePanel('selfTestPanel'); if ($('selfTestPanel').classList.contains('visible')) selfTest(); };
+// $('selfTestRun').onclick: Runs the self-test.
 $('selfTestRun').onclick = () => selfTest();
 let selfTesting = false;
+// selfTest: Self-test: checks runtime, WebGPU/WASM, assets and a model run, and prints a report.
+// Why these APIs: onnxruntime-web (ort): runs the ONNX model in the browser (WebGPU/WASM) so inference stays on-
+//   device; navigator.gpu (WebGPU): detects GPU support to pick the fastest execution provider; fetch: loads the
+//   resource over HTTP(S) with streaming/abort support; WebAssembly: runs compiled code at near-native speed in
+//   the browser; textContent: sets text safely without HTML parsing; location/history: navigates or reads the
+//   current page URL.
 async function selfTest() {
   if (selfTesting) return; selfTesting = true;
+  // show: Writes the self-test report.
+  // Why these APIs: textContent: sets text safely without HTML parsing.
   const out = [], show = () => { $('selfTestText').textContent = out.join('\n'); };
+  // line: Adds a line to the self-test report.
   const line = l => { out.push(l); show(); };
   try {
     line(`${VERSION}  ${new Date().toLocaleString()}`);
@@ -1351,12 +1614,16 @@ async function selfTest() {
   } catch (e) { line('self-test crashed: ' + errText(e)); }
   selfTesting = false;
 }
+// $('stat-dupes').onclick: Opens the duplicates list.
 $('stat-dupes').onclick = () => togglePanel('dupesPanel');
 document.querySelectorAll('[data-close]').forEach(b => b.onclick = () => $(b.dataset.close).classList.remove('visible'));
+// bind: Binds a settings control to a settings key.
 const bind = (id, key, num) => { const el = $(id); el.value = S[key]; el.onchange = () => { S[key] = num ? +el.value : el.value; saveSettings(); onSetting(key); }; };
 bind('setModel', 'model'); bind('setBackend', 'backend'); bind('setSize', 'size'); bind('setTiles', 'tiles'); bind('setDense', 'dense');
 bind('setLensMode', 'lensMode'); bind('setCmc', 'cmc'); bind('setHigh', 'high', true); bind('setLow', 'low', true); bind('setConfirm', 'confirm', true); bind('setThreads', 'threads');
+// $('setLens').onchange: Lens setting change.
 $('setLens').onchange = () => { S.lens = $('setLens').value; S.lensMode = 'manual'; $('setLensMode').value = 'manual'; saveSettings(); if (running) switchLens(S.lens); };
+// onSetting: Applies a changed setting.
 function onSetting(key) {
   if (key === 'size' && S.size !== 'auto') st.size = +S.size;
   if (key === 'threads') setupThreads(true);
@@ -1365,6 +1632,9 @@ function onSetting(key) {
     if (S.dense === 'on') { dense.active = true; dense.failed = false; if (running) startDenseWorker(); }
   }
 }
+// rememberThreadFlag: Remembers the threads setting for the service worker.
+// Why these APIs: Cache Storage API: keeps large assets on the device so later loads work offline; Response:
+//   returns the edited/redirect response from the Worker.
 async function rememberThreadFlag(on) {
   const cache = await openCache();
   if (!cache) return;
@@ -1372,6 +1642,10 @@ async function rememberThreadFlag(on) {
 }
 // The service worker always caches the shell and models. COOP/COEP (multi-thread WASM) is opt-in:
 // python http.server cannot send those headers, so the worker adds them only when this flag is on.
+// setupThreads: Enables multithreaded WASM via the service worker's cross-origin isolation headers.
+// Why these APIs: sessionStorage: keeps state only for this tab session; postMessage: passes data between the
+//   page and a worker/service worker; navigator.serviceWorker: registers/talks to the service worker that serves
+//   cached files offline.
 async function setupThreads(userChanged) {
   if (!('serviceWorker' in navigator)) { if (S.threads === 'on') banner('thr', 'Service workers unavailable — multi-thread CPU mode not possible here. Models still cache in this tab when the Cache API exists.', 'warn'); return; }
   try {
@@ -1387,11 +1661,15 @@ async function setupThreads(userChanged) {
     else if (reg) { /* caching worker stays registered when threads are off */ }
   } catch (e) { banner('thr', 'Offline cache setup failed: ' + (e.message || e), 'warn'); }
 }
+// schedulePrefetch: Prefetches core assets when the browser is idle.
+// Why these APIs: setTimeout: defers or delays work without blocking.
 function schedulePrefetch() {
+  // run: Prefetch runner.
   const run = () => { prefetchCore().catch(e => loadDiag.push('prefetch: ' + (e.message || e))); };
   if (typeof requestIdleCallback === 'function') requestIdleCallback(run, { timeout: 800 });
   else setTimeout(run, 200);
 }
+// prefetchCore: Downloads and caches core models before the user presses Start.
 async function prefetchCore() {
   if (S.model === 'cocossd' || location.protocol === 'file:') return;
   const kind = await detectorKind();
