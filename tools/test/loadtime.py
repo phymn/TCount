@@ -20,10 +20,15 @@ NANO = 'yolox_nano_person_w8.onnx'
 TINY = 'yolox_tiny_person_w8.onnx'
 
 
+# reset_log: Clears the timing log.
+# Why these APIs: open(): reads/writes a local file.
 def reset_log():
     open(LOG, 'w').close()
 
 
+# read_log: Reads timing rows written since a time.
+# Why these APIs: json: reads/writes structured data files; open(): reads/writes a local file; os / os.path:
+#   handles local paths.
 def read_log(since=0):
     rows = []
     if not os.path.exists(LOG):
@@ -39,6 +44,7 @@ def read_log(since=0):
     return rows
 
 
+# summarize: Summarizes timings per asset.
 def summarize(rows):
     by = {}
     for rec in rows:
@@ -47,6 +53,8 @@ def summarize(rows):
     return by
 
 
+# until_counting: Waits until the app starts counting.
+# Why these APIs: time: measures or paces work.
 async def until_counting(page, timeout=180):
     t_click = time.time()
     await page.click('#startBtn')
@@ -73,6 +81,8 @@ async def until_counting(page, timeout=180):
     return info
 
 
+# scenario: Measures one load scenario.
+# Why these APIs: json: reads/writes structured data files; time: measures or paces work.
 async def scenario(page, name, url, settle_ms=0, wait_prefetch=False):
     t0 = time.time()
     await page.goto(url, wait_until='load', timeout=60000)
@@ -96,6 +106,11 @@ async def scenario(page, name, url, settle_ms=0, wait_prefetch=False):
     return out
 
 
+# main: Runs load-time scenarios at several bandwidths.
+# Why these APIs: subprocess: runs a local tool and captures its output; json: reads/writes structured data
+#   files; open(): reads/writes a local file; os / os.path: handles local paths; ONNX / onnxruntime: exports,
+#   quantizes or test-runs the model in the same format the browser uses; Playwright/Chromium: drives a headless
+#   browser for automated local tests.
 async def main():
     reset_log()
     srv = subprocess.Popen([sys.executable, os.path.join(os.path.dirname(__file__), 'byteserve.py'), str(PORT), LOG, ROOT])
@@ -107,6 +122,7 @@ async def main():
             browser = await p.chromium.launch(executable_path=CHROME, args=['--headless=new', '--disable-gpu'])
             results = []
 
+            # fresh: Fresh browser context (empty cache).
             async def fresh():
                 ctx = await browser.new_context(viewport={'width': 390, 'height': 844}, service_workers='allow')
                 await ctx.add_init_script('window.__SCENE = ' + SCENE + ';')
@@ -120,6 +136,9 @@ async def main():
                     print('clear storage', e, flush=True)
                 return ctx, page
 
+            # serve: Starts the throttled server.
+            # Why these APIs: subprocess: runs a local tool and captures its output; open(): reads/writes a local file; os /
+            #   os.path: handles local paths.
             def serve(mbps):
                 return subprocess.Popen([sys.executable, os.path.join(os.path.dirname(__file__), 'byteserve.py'), str(PORT), LOG, ROOT, str(mbps)])
 

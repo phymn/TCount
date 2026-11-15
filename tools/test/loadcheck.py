@@ -1,5 +1,7 @@
 import asyncio
 from playwright.async_api import async_playwright
+# main: Checks the page loads without errors.
+# Why these APIs: Playwright/Chromium: drives a headless browser for automated local tests.
 async def main():
     async with async_playwright() as p:
         for name in ['chromium','webkit']:

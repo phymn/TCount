@@ -1,5 +1,7 @@
 import asyncio, sys
 from playwright.async_api import async_playwright
+# main: Prints page state for debugging.
+# Why these APIs: Playwright/Chromium: drives a headless browser for automated local tests.
 async def main():
     async with async_playwright() as p:
         for name, launch in [('chromium-default', dict(args=['--enable-unsafe-webgpu'])), ('chromium-swiftshader', dict(args=['--enable-unsafe-webgpu','--enable-features=Vulkan','--use-angle=swiftshader','--use-webgpu-adapter=swiftshader'])), ('chromium-new-headless', dict(channel='chromium', args=['--enable-unsafe-webgpu','--enable-features=Vulkan','--use-webgpu-adapter=swiftshader']))]:

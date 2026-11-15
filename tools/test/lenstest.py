@@ -1,6 +1,9 @@
 import asyncio, json
 from playwright.async_api import async_playwright
 SC = json.load(open('scenes.json')); FAKE = open('fakecam.js').read()
+# main: Checks lens switching with the fake camera.
+# Why these APIs: json: reads/writes structured data files; Playwright/Chromium: drives a headless browser for
+#   automated local tests.
 async def main():
     async with async_playwright() as p:
         b = await p.webkit.launch(); ctx = await b.new_context(**p.devices['iPhone 13'])
