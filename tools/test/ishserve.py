@@ -1,10 +1,17 @@
 # Simulate iSH python http.server: no wasm/onnx/mjs MIME types, single-threaded, throttled bandwidth.
 import http.server, sys, time, os
 port = int(sys.argv[1]); bw = float(sys.argv[2]) * 1e6 if len(sys.argv) > 2 else 0; threaded = len(sys.argv) > 3 and sys.argv[3] == 't'
+# H: Local HTTP handler with optional bandwidth limit.
+# Why these APIs: os / os.path: handles local paths; http.server: serves files locally for testing; time:
+#   measures or paces work.
 class H(http.server.SimpleHTTPRequestHandler):
     extensions_map = {'': 'application/octet-stream', '.html': 'text/html', '.js': 'application/javascript', '.txt': 'text/plain', '.png': 'image/png', '.jpg': 'image/jpeg'}
+    # guess_type: Correct MIME types for local serving.
+    # Why these APIs: os / os.path: handles local paths.
     def guess_type(self, path):
         ext = os.path.splitext(path)[1].lower(); return self.extensions_map.get(ext, 'application/octet-stream')
+    # copyfile: Sends a file, throttled when a limit is set.
+    # Why these APIs: time: measures or paces work.
     def copyfile(self, src, dst):
         if not bw: return super().copyfile(src, dst)
         t0 = time.time(); n = 0
@@ -14,6 +21,7 @@ class H(http.server.SimpleHTTPRequestHandler):
             dst.write(b); n += len(b)
             d = n / bw - (time.time() - t0)
             if d > 0: time.sleep(d)
+    # log_message: Silences request logging.
     def log_message(self, *a): pass
 os.chdir(os.environ.get('SITE', '.'))  # folder that contains crowd/ (set SITE=...)
 S = http.server.ThreadingHTTPServer if threaded else http.server.HTTPServer

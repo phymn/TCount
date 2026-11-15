@@ -1,6 +1,9 @@
 import asyncio, json
 from playwright.async_api import async_playwright
 SC = json.load(open('scenes.json')); FAKE = open('fakecam.js').read(); IP = open('/tmp/ip').read().split()[0]
+# page: Opens the page with a simulated failure and records the error shown.
+# Why these APIs: json: reads/writes structured data files; Playwright/Chromium: drives a headless browser for
+#   automated local tests.
 async def page(p, url, route=None, wait=25, click=True, browser='chromium'):
     b = await (p.webkit.launch() if browser == 'webkit' else p.chromium.launch())
     ctx = await b.new_context(viewport={'width': 390, 'height': 844})
@@ -10,6 +13,8 @@ async def page(p, url, route=None, wait=25, click=True, browser='chromium'):
     if click: await pg.click('#startBtn'); await asyncio.sleep(wait)
     r = await pg.evaluate("()=>({status:document.getElementById('status').textContent, banners:[...document.querySelectorAll('.banner')].map(b=>b.dataset.key+': '+b.dataset.msg), det: window.__tc && window.__tc.detector && (window.__tc.detector.name+'/'+window.__tc.detector.ep), u: window.__tc && window.__tc.ledger.unique, coi: crossOriginIsolated, thr: typeof ort!=='undefined' && ort.env.wasm.numThreads, fps: window.__tc && window.__tc.st.fps})")
     await b.close(); return r
+# main: Runs all error scenarios.
+# Why these APIs: Playwright/Chromium: drives a headless browser for automated local tests.
 async def main():
     async with async_playwright() as p:
         print('INSECURE (LAN IP over http):', await page(p, f'http://{IP}:8081/crowd/index.html', click=False))

@@ -6,11 +6,15 @@
   const imgs = {}; const load = src => imgs[src] || (imgs[src] = Object.assign(new Image(), { src }));
   let canvas, ctx, t0 = 0, timer = null, lens = LENSES[0], speed = SC.speed || 1, noiseCanvas;
   window.__fake = { time: () => (performance.now() - t0) / 1000 * speed, lens: () => lens.label, started: false };
+  // lerpPath: Interpolates a sprite position along its path at time t.
   const lerpPath = (path, t) => {
     if (t < path[0].t || t > path[path.length - 1].t) return null;
     for (let i = 0; i < path.length - 1; i++) { const a = path[i], b = path[i + 1]; if (t >= a.t && t <= b.t) { const u = (t - a.t) / Math.max(1e-6, b.t - a.t); return { x: a.x + (b.x - a.x) * u, y: a.y + (b.y - a.y) * u, h: (a.h || 0) + ((b.h || a.h || 0) - (a.h || 0)) * u, dir: Math.sign(b.x - a.x) }; } }
     const l = path[path.length - 1]; return { x: l.x, y: l.y, h: l.h, dir: 0 };
   };
+  // frame: Draws one synthetic camera frame.
+  // Why these APIs: CanvasRenderingContext2D.drawImage: copies/scales the current video frame into a canvas (GPU-
+  //   accelerated in browsers).
   function frame() {
     const t = window.__fake.time();
     const cam = SC.camera ? lerpPath(SC.camera, Math.min(t, SC.camera[SC.camera.length - 1].t)) || SC.camera[0] : { x: W / 2, y: H / 2 };
@@ -30,6 +34,9 @@
     if (SC.brightness != null && SC.brightness < 1) { ctx.fillStyle = `rgba(0,0,0,${1 - SC.brightness})`; ctx.fillRect(0, 0, W, H); }
     if (SC.noise) { ctx.globalAlpha = SC.noise; ctx.drawImage(noiseCanvas, (Math.random() * 64) | 0, (Math.random() * 64) | 0, W, H, 0, 0, W, H); ctx.globalAlpha = 1; }
   }
+  // ensure: Creates the fake camera canvas once.
+  // Why these APIs: canvas.getContext: gets a 2D/WebGL drawing context for frames and overlays; putImageData:
+  //   writes processed pixels back to a canvas; document.createElement: builds UI elements at runtime.
   function ensure() {
     if (canvas) return;
     canvas = document.createElement('canvas'); canvas.width = W; canvas.height = H; ctx = canvas.getContext('2d');
@@ -40,7 +47,12 @@
     (SC.preload || []).forEach(load);
   }
   const md = navigator.mediaDevices || (navigator.mediaDevices = {});
+  // md.enumerateDevices: Fake device list for tests.
   md.enumerateDevices = async () => LENSES.map(l => ({ kind: 'videoinput', deviceId: l.id, label: l.label, groupId: 'g' }));
+  // md.getUserMedia: Fake getUserMedia returning a canvas stream.
+  // Why these APIs: MediaStreamTrack.getCapabilities/getSettings: reads what the camera actually
+  //   supports/delivers; performance.now: high-resolution monotonic timing for FPS/latency; setInterval: runs a
+  //   periodic check.
   md.getUserMedia = async (c) => {
     ensure();
     const want = c && c.video && c.video.deviceId && (c.video.deviceId.exact || c.video.deviceId);
@@ -51,7 +63,9 @@
     frame();
     const stream = canvas.captureStream(30); const tr = stream.getVideoTracks()[0];
     try { Object.defineProperty(tr, 'label', { value: lens.label }); } catch (e) {}
+    // tr.getCapabilities: Fake camera capabilities.
     tr.getCapabilities = () => ({});
+    // tr.getSettings: Fake camera settings.
     tr.getSettings = () => ({ width: W, height: H });
     const stop = tr.stop.bind(tr); tr.stop = () => stop();
     return stream;
