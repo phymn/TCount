@@ -2,6 +2,9 @@
 
 Dates are ET. Sources: git history, PR list, README and project status notes. Anything not on `main` is marked.
 
+## 2026-11-15 — API study guide
+- Added `docs/API-GUIDE.md`: every significant API this project calls, where it is used, what it does here, why it was chosen, plus a beginner glossary. Meant as a study guide (one API a day).
+
 ## 2026-11-14 — Documentation pass
 - Added `CHANGELOG.md` and `docs/DECISIONS.md`.
 - Doc comments on every named function/class in `crowd/`, the original counters and `tools/` are on branch `docs/comments-20261114` (not merged into `main`, so open PRs #4, #5 and #9 don't get conflicts). Comments only. Every documented function/type got a comment saying what it does and why it calls each API. Proven behavior-identical: JavaScript token streams (comments excluded) and non-script HTML text are byte-equal to the previous version; Python ASTs are equal; AppleScript changes are add-only `--` lines placed outside strings and `(* *)` comments; Swift text is equal after stripping comments/whitespace.
