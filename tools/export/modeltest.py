@@ -3,6 +3,9 @@ import asyncio, json, sys, time
 from playwright.async_api import async_playwright
 br, port = sys.argv[1], sys.argv[2]; params = sys.argv[3] if len(sys.argv) > 3 else ''; maxw = int(sys.argv[4]) if len(sys.argv) > 4 else 90
 SC = json.load(open('scenes.json')); FAKE = open('fakecam.js').read(); sc = SC['walk3']
+# main: Loads the app in Chromium and checks models run.
+# Why these APIs: json: reads/writes structured data files; Playwright/Chromium: drives a headless browser for
+#   automated local tests; time: measures or paces work.
 async def main():
     async with async_playwright() as p:
         if br == 'webkit': b = await p.webkit.launch(); ctx = await b.new_context(**p.devices['iPhone 13'])

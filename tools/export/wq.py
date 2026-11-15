@@ -1,6 +1,9 @@
 # weight-only int8 (per-output-channel symmetric) via DequantizeLinear; compute stays fp32
 import onnx, numpy as np, sys
 from onnx import numpy_helper, helper, TensorProto
+# wq: Weight-quantizes an ONNX model to shrink downloads, optionally keeping only the person class.
+# Why these APIs: ONNX / onnxruntime: exports, quantizes or test-runs the model in the same format the browser
+#   uses; NumPy: vectorized numeric work.
 def wq(src, dst, person_only=False, min_elems=1024):
     m = onnx.load(src); g = m.graph
     inits = {i.name: i for i in g.initializer}

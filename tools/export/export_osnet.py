@@ -1,4 +1,5 @@
 import sys, torch, importlib.util
+# load: Imports a Python module from a file path.
 def load(path, mod):
     spec=importlib.util.spec_from_file_location(mod,path); m=importlib.util.module_from_spec(spec); spec.loader.exec_module(m); return m
 osn=load('deep-person-reid/torchreid/models/osnet.py','osn'); ain=load('deep-person-reid/torchreid/models/osnet_ain.py','ain')
