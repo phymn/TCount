@@ -5,13 +5,14 @@
    The dense model is not precached; it enters the cache only when the page requests it.
    COOP/COEP/CORP are added only when Settings → Multi-thread CPU is on (python http.server
    cannot send those headers). The flag lives in this same cache so it survives a worker restart. */
-const VERSION = 'crowd-1.2';
+const VERSION = 'crowd-1.3';
 const CACHE = 'tcount-' + VERSION;
 const THREADS_URL = new URL('__tc_threads', self.registration.scope).href;
 const SHELL = [
   './',
   './index.html',
   './app.js',
+  './rtmpose.js',
   './dense-worker.js',
   './vendor/ort.webgpu.min.js',
   './vendor/ort-wasm-simd-threaded.asyncify.js',
@@ -23,6 +24,8 @@ const EXPECT = {
   'yolox_nano_person_w8.onnx': 1117717,
   'yolox_tiny_person_w8.onnx': 5208654,
   'osnet_x0_5_reid_w8.onnx': 875829,
+  // Optional; not shipped by default (license blocker). Size if a cleared copy is placed locally:
+  'rtmpose_t_body7_256x192.onnx': 13350364,
 };
 
 let threadsFlag = null;

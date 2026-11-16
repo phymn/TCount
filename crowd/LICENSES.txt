@@ -26,3 +26,34 @@ coco-ssd fallback (not bundled): TensorFlow.js + coco-ssd — Apache License 2.0
 
 Note: vendor/ort-wasm-simd-threaded.asyncify.js (MIT) is modified in one place: the shared WebAssembly
 memory maximum reads globalThis.__ortMaxPages (default 1 GB instead of 4 GB) so iOS Safari can reserve it.
+
+------------------------------------------------------------------------
+RTMPose verifier (crowd/rtmpose.js) — code vs weights
+------------------------------------------------------------------------
+crowd/rtmpose.js
+  Preprocess + SimCC decode adapted from Tau-J/rtmlib (Apache License 2.0).
+  https://github.com/Tau-J/rtmlib
+  RTMPose architecture / mmpose project code: Apache License 2.0.
+  https://github.com/open-mmlab/mmpose  (projects/rtmpose)
+
+models/rtmpose_t_body7_256x192.onnx  — NOT SHIPPED in this release
+  Candidate weights (for local testing only, not redistributed here):
+    Filename: rtmpose-t_simcc-body7_pt-body7_420e-256x192-026a1439_20230504 (end2end.onnx, 13,350,364 bytes)
+    Source zip: https://download.openmmlab.com/mmpose/v1/projects/rtmposev1/onnx_sdk/rtmpose-t_simcc-body7_pt-body7_420e-256x192-026a1439_20230504.zip
+    Mirror: https://huggingface.co/Tau-J/RTMPose
+    Upstream pth: https://download.openmmlab.com/mmpose/v1/projects/rtmposev1/rtmpose-t_simcc-body7_pt-body7_420e-256x192-026a1439_20230504.pth
+    Training set label: Body7 / Body8 family (COCO, AI Challenger, CrowdPose, MPII, + related;
+      Body8 adds OCHuman for eval). See mmpose projects/rtmpose README “Body8”.
+  License status (as of 2026-11-07) — BLOCKER for redistribution:
+    - rtmlib / mmpose / RTMPose *source code*: Apache-2.0 (commercial use of code OK with attribution).
+      Tau-J, rtmlib#65 (2026-01-13): code is Apache-2.0; points to dataset caveats for weights.
+    - COCO-WholeBody–trained weights: SenseTime terms = research/non-commercial unless separately
+      licensed (confirmed by dataset authors via rtmlib#65 thread, 2026-03-30). Not used here.
+    - Body7 weights: Tau-J said “feel free to use” Body7 for commercial use in mmpose#3062
+      (2024-05-29), but follow-ups on *dataset* terms (AI Challenger et al.) remain open
+      (#3062 later comments; rtmlib#65 2026-11-07 Body7 clarification unanswered; mmpose
+      discussion #3274 asks dataset-level permission for Body7 ONNX and is unresolved).
+    - Library Apache license alone is NOT evidence that pretrained weights are commercially OK.
+  Therefore this build does NOT ship or auto-download RTMPose weights. Place a cleared ONNX at
+  models/rtmpose_t_body7_256x192.onnx only after legal sign-off. Until then the app uses a
+  clearly labeled size-based stand-in gate (not pose verification) and never claims RTMPose OK.

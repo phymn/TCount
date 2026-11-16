@@ -8,19 +8,25 @@
 (() => {
 const $ = id => document.getElementById(id);
 const Q = new URLSearchParams(location.search);
-const VERSION = 'crowd-1.2';
-const CHANGE_EN = 'Faster launches: WASM and models stay on this device. The dense model downloads only when dense mode is on.';
-const CHANGE_ES = 'Arranques más rápidos: el WASM y los modelos se quedan en el dispositivo. El modelo denso se descarga solo con el modo denso activado.';
+const VERSION = 'crowd-1.3';
+const CHANGE_EN = 'Simple/Superuser UI; shared body validation path; RTMPose-ready verifier (weights not shipped — license blocker).';
+const CHANGE_ES = 'UI Simple/Superusuario; misma validación para conteo y cajas; verificador RTMPose listo (pesos no incluidos — licencia pendiente).';
 const now = () => performance.now();
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const abs = p => new URL(p, location.href).href;
 
 // ------------------------------------------------------------------ settings
-const DEFAULTS = { model: 'auto', backend: 'auto', size: 'auto', tiles: 'auto', dense: 'auto', lensMode: 'auto', cmc: 'on',
-  high: 0.80, low: 0.65, confirm: 2, threads: 'off', lens: '', v: 2 };
+const DEFAULTS = { model: 'auto', backend: 'auto', size: 'auto', tiles: 'auto', dense: 'auto', pose: 'auto', lensMode: 'auto', cmc: 'on',
+  high: 0.80, low: 0.65, confirm: 2, threads: 'off', lens: '', ui: 'simple', lang: 'en', v: 3 };
 let S = Object.assign({}, DEFAULTS);
-try { const o = JSON.parse(localStorage.getItem('tcrowd-settings') || '{}'); if (!o.v || o.v < 2) delete o.confirm; delete o.v; Object.assign(S, o); } catch (e) {} // v2: new default confirm=2
+try {
+  const o = JSON.parse(localStorage.getItem('tcrowd-settings') || '{}');
+  if (!o.v || o.v < 2) delete o.confirm;
+  if (!o.v || o.v < 3) { /* keep prior detector settings; new ui/lang/pose defaults apply when absent */ }
+  delete o.v; Object.assign(S, o);
+} catch (e) {}
 for (const k of Object.keys(DEFAULTS)) if (Q.has(k)) S[k] = typeof DEFAULTS[k] === 'number' ? +Q.get(k) : Q.get(k);
+if (Q.get('ui') === 'superuser') S.ui = 'super';
 const saveSettings = () => { try { localStorage.setItem('tcrowd-settings', JSON.stringify(S)); } catch (e) {} };
 
 const CFG = {
@@ -28,7 +34,45 @@ const CFG = {
   reidMinH: 56, reidMinW: 20, reidMaxOverlap: 0.3, reidEvery: 900, reidBatch: 6, reidWaitFrames: 3,
   gallerySize: 8, recheckWindowMs: 6000, switchPauseMs: 1500,
   ghostMs: 700, ghostFrames: 8, ghostGoneMs: 2500, darkLuma: 40, veryDarkLuma: 18, lightExitLuma: 48, lightEnterMs: 2500, lightExitMs: 1200, lightWarmupMs: 2000, blackLuma: 6, blackFrames: 15,
+  // Soft size floor only (NOT upright aspect gates / NOT blanket edge rejection).
+  bodyMinArea: 28 * 28, bodyMinH: 36, poseBatch: 3, poseEveryMs: 450,
 };
+
+const I18N = {
+  en: {
+    ready: 'Ready — tap Count', counting: 'Counting people…', starting: 'Starting…', stopped: 'Stopped',
+    count: 'Count', done: 'Done', countAgain: 'Count Again', people: 'People', inFrame: 'In Frame',
+    dupes: 'Possible dupes', tapReview: 'tap to review', estCrowd: 'Est. crowd', uniquePeople: 'people counted',
+    settings: 'Settings', finalTitle: 'Final count', finalNote: 'Best estimate. A moving phone cannot guarantee an exact unique total across occlusions, darkness and revisits.',
+    privacy: 'All processing stays on your device. Appearance fingerprints are kept in memory only and erased on Count Again or when the page closes — nothing is uploaded.',
+    simple: 'Simple', superuser: 'Superuser', running: 'Counting…',
+  },
+  es: {
+    ready: 'Listo — toca Contar', counting: 'Contando personas…', starting: 'Iniciando…', stopped: 'Detenido',
+    count: 'Contar', done: 'Listo', countAgain: 'Contar de nuevo', people: 'Personas', inFrame: 'En cuadro',
+    dupes: 'Posibles dup.', tapReview: 'toca para revisar', estCrowd: 'Multitud est.', uniquePeople: 'personas contadas',
+    settings: 'Ajustes', finalTitle: 'Conteo final', finalNote: 'Mejor estimación. Un teléfono en movimiento no garantiza un total exacto con oclusiones, oscuridad y revisitas.',
+    privacy: 'Todo el procesamiento queda en tu dispositivo. Las huellas de apariencia solo viven en memoria y se borran al Contar de nuevo o al cerrar la página — no se sube nada.',
+    simple: 'Simple', superuser: 'Superusuario', running: 'Contando…',
+  }
+};
+function t(key) { return (I18N[S.lang] || I18N.en)[key] || (I18N.en[key] || key); }
+function applyI18n() {
+  document.querySelectorAll('[data-i18n]').forEach(el => { const k = el.getAttribute('data-i18n'); if (k) el.textContent = t(k); });
+  const ss = $('uiSimpleBtn'), su = $('uiSuperBtn');
+  if (ss) ss.textContent = t('simple'); if (su) su.textContent = t('superuser');
+  if (!running && !$('result').classList.contains('visible')) status(t('ready'), 'ready');
+  if ($('startBtn') && !running) $('startBtn').textContent = t('count');
+  if ($('stopBtn')) $('stopBtn').textContent = t('done');
+  document.documentElement.lang = S.lang === 'es' ? 'es' : 'en';
+}
+function applyUiMode() {
+  document.body.classList.toggle('mode-simple', S.ui !== 'super');
+  document.body.classList.toggle('mode-super', S.ui === 'super');
+  document.querySelectorAll('#uiSeg [data-ui]').forEach(b => b.classList.toggle('on', b.dataset.ui === (S.ui === 'super' ? 'super' : 'simple')));
+  document.querySelectorAll('#langSeg [data-lang]').forEach(b => b.classList.toggle('on', b.dataset.lang === S.lang));
+  applyI18n();
+}
 
 // ------------------------------------------------------------------ UI helpers
 function status(msg, cls = '') { $('status').textContent = msg; $('status').className = cls; }
@@ -65,13 +109,18 @@ if (window.__ortLoadFailed || typeof ort === 'undefined') {
 const ASSETS = [
   ['vendor/ort.webgpu.min.js', 66417, true], ['vendor/ort-wasm-simd-threaded.asyncify.js', 0, true], ['vendor/ort-wasm-simd-threaded.asyncify.wasm', 26781914, true],
   ['models/yolox_nano_person_w8.onnx', 1117717, true], ['models/yolox_tiny_person_w8.onnx', 5208654, true], ['models/osnet_x0_5_reid_w8.onnx', 875829, true],
-  ['models/dmcount_qnrf_w8.onnx', 21560628, false], ['dense-worker.js', 0, true], ['app.js', 0, true],
+  ['models/dmcount_qnrf_w8.onnx', 21560628, false],
+  // RTMPose-t Body7 ONNX — optional, NOT shipped until weight/dataset commercial eligibility is cleared.
+  ['models/rtmpose_t_body7_256x192.onnx', 13350364, false],
+  ['dense-worker.js', 0, true], ['rtmpose.js', 0, true], ['app.js', 0, true],
 ];
 const expectedSize = rel => { const a = ASSETS.find(x => x[0] === rel); return a ? a[1] : 0; };
 const MB = n => (n / 1048576).toFixed(1) + ' MB';
 const REID_REL = 'models/osnet_x0_5_reid_w8.onnx';
 const WASM_REL = 'vendor/ort-wasm-simd-threaded.asyncify.wasm';
 const DENSE_REL = 'models/dmcount_qnrf_w8.onnx';
+const POSE_REL = 'models/rtmpose_t_body7_256x192.onnx';
+const POSE_LICENSE_BLOCK = 'RTMPose Body7 weights not shipped: code Apache-2.0, but Body7 dataset terms (incl. AI Challenger) remain commercially unresolved; COCO-WholeBody is non-commercial.';
 // Cache name is the app version. crowd/sw.js must use the same string. Activating a new
 // version deletes every other tcount-* cache, so a replaced model cannot linger.
 const CACHE_NAME = 'tcount-' + VERSION;
@@ -397,6 +446,91 @@ function meanEmb(list) {
   for (const v of list) for (let i = 0; i < D; i++) m[i] += v[i];
   let s = 0; for (let i = 0; i < D; i++) s += m[i] * m[i]; s = 1 / Math.sqrt(s + 1e-12);
   for (let i = 0; i < D; i++) m[i] *= s; return m;
+}
+
+// ------------------------------------------------------------------ RTMPose body verifier (shared count + display path)
+const posePrepCanvas = document.createElement('canvas');
+const posePrepCtx = posePrepCanvas.getContext('2d', { willReadFrequently: true });
+class PoseVerifier {
+  constructor() {
+    this.session = null; this.ok = false; this.status = 'blocked'; this.reason = POSE_LICENSE_BLOCK;
+    this.lastMs = 0; this.name = 'RTMPose-t'; this.ep = null; this.mode = 'none'; // 'rtmpose' | 'stand-in' | 'none'
+  }
+  async probePresent() {
+    try {
+      const r = await fetch(abs(POSE_REL), { method: 'HEAD', cache: 'force-cache' });
+      if (!r.ok) return false;
+      const len = +r.headers.get('content-length');
+      if (len && expectedSize(POSE_REL) && len !== expectedSize(POSE_REL)) return false;
+      return true;
+    } catch (e) {
+      try { const b = await cacheGet(POSE_REL); return !!(b && b.length); } catch (e2) { return false; }
+    }
+  }
+  async load(ep, onStatus) {
+    const RT = window.TCountRTMPose;
+    if (!RT) { this.status = 'blocked'; this.reason = 'rtmpose.js missing'; this.mode = 'stand-in'; return this; }
+    const want = S.pose;
+    if (want === 'off') { this.status = 'off'; this.reason = 'pose verify off'; this.mode = 'stand-in'; return this; }
+    const present = await this.probePresent();
+    if (!present) {
+      this.status = 'blocked'; this.reason = POSE_LICENSE_BLOCK;
+      this.mode = 'stand-in'; // labeled stand-in — never claimed as pose-verified
+      loadDiag.push('pose weights absent — ' + POSE_LICENSE_BLOCK);
+      return this;
+    }
+    // Weights present locally (developer/test). Still not a commercial clearance.
+    onStatus && onStatus('Loading RTMPose verifier…');
+    try {
+      this.session = await makeSession(abs(POSE_REL), ep, onStatus);
+      this.ep = ep;
+      const warm = new ort.Tensor('float32', new Float32Array(3 * 256 * 192), [1, 3, 256, 192]);
+      await withTimeout(this.session.run({ input: warm }), 60000, 'pose warmup');
+      this.ok = true; this.status = 'ready'; this.mode = 'rtmpose';
+      this.reason = 'local weights loaded (license still unresolved for redistribution)';
+      loadDiag.push('RTMPose session ready on ' + ep + ' — redistribution still license-blocked');
+    } catch (e) {
+      logErr('pose-load', e);
+      this.session = null; this.ok = false; this.status = 'error'; this.reason = errText(e); this.mode = 'stand-in';
+    }
+    return this;
+  }
+  /** Soft stand-in when RTMPose weights are unavailable. NOT pose verification. */
+  standInAccept(box, score) {
+    const [, , w, h] = box;
+    const area = w * h;
+    if (area < CFG.bodyMinArea || h < CFG.bodyMinH) return { ok: false, reason: 'tiny-fragment', mode: 'stand-in' };
+    if ((score || 0) < 0.35) return { ok: false, reason: 'weak-score', mode: 'stand-in' };
+    // No upright aspect gate, no blanket edge reject (research UNVALIDATED suggestions avoided).
+    return { ok: true, reason: 'stand-in-size', mode: 'stand-in' };
+  }
+  async verifyBox(box, score) {
+    if (!this.ok || !this.session || !window.TCountRTMPose) return this.standInAccept(box, score);
+    const RT = window.TCountRTMPose;
+    const prep = RT.preprocessDraw(frameCanvas, box, posePrepCanvas, posePrepCtx);
+    const t0 = now();
+    const out = await this.session.run({ input: new ort.Tensor('float32', prep.tensor, prep.dims) });
+    this.lastMs = now() - t0;
+    const simccX = out.simcc_x || out[Object.keys(out).find(k => /x/i.test(k))];
+    const simccY = out.simcc_y || out[Object.keys(out).find(k => /y/i.test(k))];
+    const xData = simccX.data, yData = simccY.data;
+    const decoded = RT.decodeSimcc(xData, yData, { cx: prep.cx, cy: prep.cy, sw: prep.sw, sh: prep.sh, w: prep.w, h: prep.h, wx: xData.length / 17, wy: yData.length / 17 });
+    const verdict = RT.acceptBodyStructure(decoded.keypoints, decoded.scores, box);
+    verdict.mode = 'rtmpose';
+    verdict.ms = this.lastMs;
+    verdict.scores = decoded.scores;
+    verdict.keypoints = decoded.keypoints;
+    return verdict;
+  }
+}
+let pose = new PoseVerifier();
+
+/** Shared validation used by counting AND by which boxes are drawn as accepted. */
+function trackIsRegisteredAccepted(t) {
+  return !!(t && t.matchedThisFrame && t.personId && t.bodyOk);
+}
+function softBodyGate(box, score) {
+  return pose.standInAccept(box, score);
 }
 
 // ------------------------------------------------------------------ Kalman filter (ByteTrack xyah model; F,Q,R are per-dimension so it splits into 4 exact 2x2 filters)
@@ -748,10 +882,11 @@ function requestDense() {
 const tracker = new ByteTracker(), ledger = new Ledger(), motion = new MotionEstimator();
 let detector = null, reid = null, running = false, loopGen = 0, loadedKey = '';
 const st = { fps: 0, lastFrameT: 0, inFrame: 0, size: 640, tiles: false, noDetSince: 0, smallSince: 0, lumaEma: -1, light: 'ok',
-  pauseUntil: 0, lastLensSwitch: 0, csv: [], lastCsv: 0, timings: {}, lastDets: 0, crowdedness: 0, ladder: '', tiledEstAt: 0, reidQueue: 0, frames: 0 };
+  pauseUntil: 0, lastLensSwitch: 0, csv: [], lastCsv: 0, timings: {}, lastDets: 0, crowdedness: 0, ladder: '', tiledEstAt: 0, reidQueue: 0, frames: 0,
+  poseMs: 0, poseRejects: 0, poseAccepts: 0 };
 window.__tc = { st, ledger, tracker, dense, cam, S, CFG, loadDiag, assetFrom, CACHE_NAME, VERSION, ASSET_BASE,
-  get detector() { return detector; }, get reid() { return reid; }, get running() { return running; },
-  denseModelEnabled };
+  get detector() { return detector; }, get reid() { return reid; }, get pose() { return pose; }, get running() { return running; },
+  denseModelEnabled, trackIsRegisteredAccepted, softBodyGate };
 
 function confirmFrames() { return Math.max(1, S.confirm | 0); } // same in all light: register people as soon as they are seen; late de-dup cleans extras
 function markLensChange(why) {
@@ -767,6 +902,7 @@ function ensureModels() {
   if (!modelsPromise) modelsPromise = loadModels().catch(err => { modelsPromise = null; throw err; });
   return modelsPromise;
 }
+let poseLoading = null;
 function kickReid() {
   if (reid || reidLoading || !(detector instanceof YoloxDetector)) return;
   const ep = detector.ep;
@@ -782,11 +918,29 @@ function kickReid() {
     } finally { modelBytes.delete(REID_REL); reidLoading = null; }
   })();
 }
+function kickPose() {
+  if (poseLoading || pose.ok || S.pose === 'off') return;
+  if (!(detector instanceof YoloxDetector) && S.pose !== 'on') return;
+  const ep = (detector && detector.ep) || 'wasm';
+  poseLoading = (async () => {
+    try {
+      await pose.load(ep, msg => { if (S.ui === 'super') banner('pose', msg, 'info'); });
+      banner('pose');
+      if (pose.status === 'blocked') {
+        if (S.ui === 'super') banner('pose', 'Pose verify blocked (weights not shipped). Using labeled stand-in size gate — not RTMPose.', 'warn');
+      } else if (pose.ok) {
+        banner('pose', 'RTMPose local weights loaded for testing. Not approved for redistribution.', 'info');
+      }
+    } catch (e) {
+      logErr('pose', e); pose.mode = 'stand-in'; pose.status = 'error'; pose.reason = errText(e);
+    } finally { poseLoading = null; }
+  })();
+}
 async function loadModels() {
   const want = S.model;
   const kind = await detectorKind();
   const key = want + '|' + S.backend + '|' + kind;
-  if (detector && loadedKey === key) { kickReid(); return; }
+  if (detector && loadedKey === key) { kickReid(); kickPose(); return; }
   detector = null; reid = null;
   const onS = m => { if (!running) status(m, 'running'); };
   let ortOk = false;
@@ -826,8 +980,12 @@ async function loadModels() {
   }
   if (detector instanceof YoloxDetector) {
     kickReid();
+    kickPose();
     if (!detector.webgpuAvailable) banner('gpu', 'WebGPU is not available here — running on the CPU (WASM). Safari 26 / iOS 26 enables WebGPU.', 'info');
-  } else banner('reid', 'Re-ID is unavailable with the coco-ssd fallback — people who leave and return may be recounted.', 'warn');
+  } else {
+    banner('reid', 'Re-ID is unavailable with the coco-ssd fallback — people who leave and return may be recounted.', 'warn');
+    kickPose();
+  }
   st.size = S.size === 'auto' ? (detector.ep === 'webgpu' ? 640 : 512) : +S.size;
   loadedKey = key;
 }
@@ -891,10 +1049,12 @@ async function step() {
   T.det = now() - t0; t0 = now();
   const { tracked } = tracker.update(dets, Math.abs(mo.dx) + Math.abs(mo.dy) > 0.5 ? mo : null);
   T.track = now() - t0; t0 = now();
+  await verifyBodies(tracked);
+  T.pose = now() - t0; t0 = now();
   await processIdentities(tracked, W, H, dets);
   T.reid = now() - t0;
   const visible = tracked.filter(t => t.matchedThisFrame);
-  st.inFrame = visible.filter(t => t.personId).length;
+  st.inFrame = visible.filter(t => trackIsRegisteredAccepted(t)).length;
   const hd = dets.filter(d => d.score >= CFG.trackHigh);
   st.lastDets = hd.length;
   let overl = 0; for (let i = 0; i < hd.length; i++) for (let j = i + 1; j < hd.length; j++) if (iou(hd[i].box, hd[j].box) > 0.3) overl++;
@@ -910,6 +1070,44 @@ function adaptSize(msPerRegion) {
   const small = st.smallSince && now() - st.smallSince > 1500;
   if (msPerRegion > 250 && i > 0) st.size = sizes[i - 1];
   else if (msPerRegion < 45 && small && i < sizes.length - 1) st.size = sizes[i + 1];
+}
+
+// ---------------------------------------------------------------- body validation (shared by count registration + accepted box drawing)
+async function verifyBodies(tracked) {
+  const visible = tracked.filter(t => t.matchedThisFrame && t.activated);
+  const need = [];
+  const tNow = now();
+  for (const t of visible) {
+    const box = t.detBox || t.box;
+    // Refresh pose on new / undecided tracks, or periodically.
+    const stale = !t.bodyCheckedAt || tNow - t.bodyCheckedAt > CFG.poseEveryMs;
+    const undecided = !t.personId || t.bodyOk == null;
+    if (stale || undecided) need.push(t);
+    else continue;
+  }
+  // Prefer undecided high-score tracks; cap batch for browser budget.
+  need.sort((a, b) => (b.score || 0) - (a.score || 0));
+  const batch = need.slice(0, CFG.poseBatch);
+  for (const t of batch) {
+    const box = t.detBox || t.box;
+    try {
+      const v = await pose.verifyBox(box, t.score);
+      t.bodyOk = !!v.ok;
+      t.bodyWhy = v.reason;
+      t.bodyMode = v.mode;
+      t.bodyVis = v.vis;
+      t.poseKpts = v.keypoints || null;
+      t.bodyCheckedAt = tNow;
+      if (v.ok) st.poseAccepts++; else st.poseRejects++;
+      if (v.ms != null) st.poseMs = v.ms;
+    } catch (e) {
+      logErr('pose-run', e);
+      const v = softBodyGate(box, t.score);
+      t.bodyOk = !!v.ok; t.bodyWhy = 'pose-error:' + v.reason; t.bodyMode = 'stand-in'; t.bodyCheckedAt = tNow;
+    }
+  }
+  // Tracks not in this batch keep prior bodyOk; brand-new tracks without a check yet are not accepted.
+  for (const t of visible) if (t.bodyOk == null) { t.bodyOk = false; t.bodyWhy = 'pending'; t.bodyMode = pose.mode; }
 }
 
 // ---------------------------------------------------------------- identity decisions (trackId -> persistent personId)
@@ -964,9 +1162,11 @@ async function processIdentities(tracked, W, H, dets) {
   for (const t of visible) if (t.personId) { const r = ledger.root(t.personId); if (r) { t.personId = r.id; held.set(r.id, t); } else t.personId = 0; }
   for (const [id] of held) { const p = ledger.persons.get(id); p.firstSeen = p.firstSeen || tNow; p.lastSeen = tNow; p.seenFrames = (p.seenFrames || 0) + 1; }
   // 2) decisions for confirmed tracks (N frames above threshold)
+  // bodyOk comes from the SAME validation path used for drawing accepted boxes.
   for (const t of visible) {
     if (t.personId || paused || t.hits < confirmFrames()) continue;
     if ((t.hiHits || 0) < confirmFrames()) continue; // only confidently-detected tracks may add a person (blocks dark-noise / fragment boxes)
+    if (!t.bodyOk) continue; // reject isolated hand/arm / failed body structure (or stand-in size gate)
     if (reid && !t.emb.length && t.waitFrames++ < CFG.reidWaitFrames) continue; // no usable crop yet (cut off / overlapping): wait a few frames at most
     const thumb = thumbOf(t.detBox || t.box);
     if (!t.emb.length) {
@@ -1120,7 +1320,7 @@ function colorFor(p) { return !p ? '#9aa3b5' : p.state === 'possible' ? '#ffab40
 const heatCanvas = document.createElement('canvas');
 function draw() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  if (dense.active && dense.map && now() - dense.estAt < 4000) {
+  if (S.ui === 'super' && dense.active && dense.map && now() - dense.estAt < 4000) {
     const { map, mapW, mapH } = dense; let mx = 1e-6; for (const v of map) if (v > mx) mx = v;
     if (heatCanvas.width !== mapW || heatCanvas.height !== mapH) { heatCanvas.width = mapW; heatCanvas.height = mapH; }
     const hc = heatCanvas.getContext('2d'), im = hc.createImageData(mapW, mapH);
@@ -1129,14 +1329,22 @@ function draw() {
   }
   const fs = Math.max(12, canvas.width / 45);
   ctx.font = `bold ${fs}px sans-serif`;
+  const simple = S.ui !== 'super';
   for (const t of tracker.tracked) {
     if (!t.matchedThisFrame) continue;
-    const [x, y, w, h] = t.box, p = t.personId ? ledger.root(t.personId) : null, col = colorFor(p);
-    const label = p ? `P${p.id}${p.state === 'possible' ? '?' : ''}` : '…';
-    ctx.strokeStyle = col; ctx.lineWidth = Math.max(2, canvas.width / 400); ctx.setLineDash(p ? [] : [6, 4]); ctx.strokeRect(x, y, w, h); ctx.setLineDash([]);
-    const ly = Math.max(fs + 4, y);
-    ctx.fillStyle = col; ctx.fillRect(x, ly - fs - 4, ctx.measureText(label).width + 8, fs + 4);
-    ctx.fillStyle = '#000'; ctx.fillText(label, x + 4, ly - 4);
+    const accepted = trackIsRegisteredAccepted(t);
+    // Simple: boxes ONLY for accepted/registered people (same validation path as the count).
+    if (simple && !accepted) continue;
+    const [x, y, w, h] = t.box, p = t.personId ? ledger.root(t.personId) : null;
+    const col = accepted ? colorFor(p) : (t.bodyOk === false ? '#ff453a' : '#9aa3b5');
+    const label = accepted ? `P${p.id}${p.state === 'possible' ? '?' : ''}` : (t.bodyOk === false ? `×${t.bodyWhy || ''}` : '…');
+    ctx.strokeStyle = col; ctx.lineWidth = Math.max(2, canvas.width / 400); ctx.setLineDash(accepted ? [] : [6, 4]); ctx.strokeRect(x, y, w, h); ctx.setLineDash([]);
+    if (!simple || accepted) {
+      const ly = Math.max(fs + 4, y);
+      const tw = ctx.measureText(label).width + 8;
+      ctx.fillStyle = col; ctx.fillRect(x, ly - fs - 4, tw, fs + 4);
+      ctx.fillStyle = '#000'; ctx.fillText(label, x + 4, ly - 4);
+    }
   }
 }
 function uiTick() {
@@ -1153,6 +1361,10 @@ function uiTick() {
   $('stat-crowd').style.display = dense.active ? '' : 'none';
   if (dense.active) { $('crowd').textContent = dense.est == null ? '…' : (dense.source === 'density' ? '≈' + Math.round(dense.est) : '≥' + dense.est); $('crowd-sub').textContent = dense.source === 'density' ? 'visible now, ±25%' : 'tiled detections'; }
   if (detector) chip('chip-backend', `${detector.name} · ${detector.ep}${detector.lastIn ? ' · ' + detector.lastIn : ''}${st.tiles ? ' +tiles' : ''}`, detector.ep === 'webgpu' ? 'on' : detector.ep === 'wasm' ? '' : 'warn');
+  if ($('chip-pose')) {
+    const ps = pose.ok ? `pose: rtmpose ${pose.lastMs ? pose.lastMs.toFixed(0) + 'ms' : ''}` : `pose: ${pose.status}`;
+    chip('chip-pose', ps, pose.ok ? 'on' : pose.status === 'blocked' ? 'warn' : pose.status === 'off' ? '' : 'bad');
+  }
   chip('chip-lens', `lens: ${cam.lensKind}${cam.digitalZoom > 1 ? ' · ' + cam.digitalZoom.toFixed(1) + '× dig' : ''}${S.lensMode === 'auto' ? ' (auto)' : ''}`, now() < st.pauseUntil ? 'warn' : '');
   chip('chip-dense', `dense: ${dense.active ? (dense.failed ? 'tiled' : dense.ready ? 'on' : 'loading') : 'off'}`, dense.active ? 'warn' : '');
   chip('chip-light', st.lumaEma < 0 ? 'light: —' : `light: ${st.light === 'ok' ? 'ok' : st.light === 'dark' ? 'dark' : 'very dark'} (${st.lumaEma.toFixed(0)})`, st.light === 'ok' ? '' : 'bad');
@@ -1174,7 +1386,10 @@ function renderDebug() {
     detector && detector.bench ? `bench: ${detector.bench.join(' | ')}` : '',
     detector && detector.loadErrors && detector.loadErrors.length ? `load notes: ${detector.loadErrors.join(' | ')}` : '',
     `re-id: ${reid ? reid.name + ' / ' + reid.ep + ' ' + reid.lastMs.toFixed(0) + ' ms/batch' : 'off'}  queue=${st.reidQueue}  same≥${S.high}  new<${S.low}`,
-    `ms: grab ${f(T.grab)}  cmc ${f(T.cmc)}  det ${f(T.det)} (last net ${detector ? f(detector.lastMs) : '—'})  track ${f(T.track)}  reid ${f(T.reid)}  →  ${st.fps.toFixed(1)} fps`,
+    `pose: status=${pose.status} mode=${pose.mode} ep=${pose.ep || '—'} lastMs=${pose.lastMs ? pose.lastMs.toFixed(0) : '—'} accepts=${st.poseAccepts} rejects=${st.poseRejects}`,
+    `pose note: ${pose.reason || '—'}`,
+    `ms: grab ${f(T.grab)}  cmc ${f(T.cmc)}  det ${f(T.det)} (last net ${detector ? f(detector.lastMs) : '—'})  track ${f(T.track)}  pose ${f(T.pose)}  reid ${f(T.reid)}  →  ${st.fps.toFixed(1)} fps`,
+    `ui: ${S.ui}  lang: ${S.lang}  shared validation: count boxes == bodyOk+personId`,
     `cmc: dx=${motion.last.dx.toFixed(1)} dy=${motion.last.dy.toFixed(1)} px  inliers=${(motion.last.conf || 0).toFixed(2)}  blocks=${motion.last.n || 0}`,
     `light: ${st.light}  brightness median=${st.lumaMed ?? '—'} mean=${st.lumaMean != null ? st.lumaMean.toFixed(0) : '—'} p98=${st.lumaP98 ?? '—'} smoothed=${st.lumaEma.toFixed(0)} (dark<${CFG.darkLuma}, very dark<${CFG.veryDarkLuma}, ok>${CFG.lightExitLuma})  frame grab=${GRAB_MODES[st.grabMode || 0]} blackRun=${st.blackRun || 0}  confirm=${confirmFrames()} frames  torch=${cam.caps.torch ? (cam.torchOn ? 'on' : 'off') : 'n/a'}`,
     ...loadDiag.slice(-12).map(l => 'load: ' + l),
@@ -1240,11 +1455,11 @@ async function loop(gen) {
     await new Promise(r => setTimeout(r, 0));
   }
 }
-function startLoop() { loopGen++; const g = loopGen; loop(g); if (!rafId) render(); status('Counting people…', 'running'); }
+function startLoop() { loopGen++; const g = loopGen; loop(g); if (!rafId) render(); status(t('counting'), 'running'); }
 
 // ---------------------------------------------------------------- controls
 $('startBtn').onclick = async () => {
-  $('startBtn').disabled = true; status('Starting…', 'running');
+  $('startBtn').disabled = true; status(t('starting'), 'running');
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { status('Camera API unavailable (needs 127.0.0.1 or https)', 'error'); $('startBtn').disabled = false; return; }
   const modelsP = ensureModels(); // overlaps the camera permission prompt and the stream startup
   try { await openCamera({ label: S.lensMode === 'manual' ? S.lens : '' }); }
@@ -1252,8 +1467,9 @@ $('startBtn').onclick = async () => {
   try { await enumerateCams(); } catch (e) { logErr('cams', e); } // labels only appear after permission
   try { await modelsP; } catch (e) { status('Model load failed: ' + (e.message || e), 'error'); $('startBtn').disabled = false; return; }
   tracker.reset(); motion.reset(); st.csv = []; st.lastLensSwitch = now(); st.lumaEma = -1; st.runStart = now(); st.camStart = now(); st.light = 'ok'; st.lightPendSince = 0; st.blackRun = 0;
+  st.poseAccepts = 0; st.poseRejects = 0;
   running = true;
-  $('stopBtn').disabled = false; $('switchBtn').disabled = false; $('startBtn').textContent = 'Running…';
+  $('stopBtn').disabled = false; $('switchBtn').disabled = false; $('startBtn').textContent = t('running');
   startLoop();
 };
 $('stopBtn').onclick = () => {
@@ -1267,8 +1483,9 @@ $('stopBtn').onclick = () => {
   if (dense.peak) parts.push(`Peak estimated visible crowd: ≈${Math.round(dense.peak)} (${dense.source || 'density'}; separate from Unique)`);
   if (st.csv.some(r => r[8] !== 'ok')) parts.push('Parts of the session were in low light (low confidence)');
   if (ledger.ghosts) parts.push(`${ledger.ghosts} split-second detection${ledger.ghosts === 1 ? '' : 's'} (under ${CFG.ghostMs / 1000} s, then gone) treated as noise and not counted`);
+  parts.push(`Body gate: ${pose.mode} (${pose.status}) · accepts ${st.poseAccepts} / rejects ${st.poseRejects}`);
   $('final-detail').innerHTML = parts.join('<br>');
-  $('result').classList.add('visible'); status('Stopped', '');
+  $('result').classList.add('visible'); status(t('stopped'), '');
   $('startBtn').disabled = $('stopBtn').disabled = $('switchBtn').disabled = true;
 };
 $('switchBtn').onclick = async () => {
@@ -1281,10 +1498,17 @@ $('switchBtn').onclick = async () => {
 $('resetBtn').onclick = () => {
   $('result').classList.remove('visible'); tracker.reset(); ledger.reset(); motion.reset(); TRACK_ID = 1;
   dense.est = null; dense.peak = 0; dense.map = null; dense.active = false; st.csv = []; st.inFrame = 0; uiTick();
-  $('startBtn').disabled = false; $('startBtn').textContent = 'Start Camera';
+  $('startBtn').disabled = false; $('startBtn').textContent = t('count');
   $('stopBtn').disabled = $('switchBtn').disabled = true;
-  status('Ready — tap Start', 'ready'); ctx.clearRect(0, 0, canvas.width, canvas.height);
+  status(t('ready'), 'ready'); ctx.clearRect(0, 0, canvas.width, canvas.height);
 };
+// UI mode + language — switching preserves session/count (no reset).
+document.querySelectorAll('#uiSeg [data-ui]').forEach(b => b.onclick = () => {
+  S.ui = b.dataset.ui === 'super' ? 'super' : 'simple'; saveSettings(); applyUiMode(); uiTick();
+});
+document.querySelectorAll('#langSeg [data-lang]').forEach(b => b.onclick = () => {
+  S.lang = b.dataset.lang === 'es' ? 'es' : 'en'; saveSettings(); applyI18n(); uiTick();
+});
 $('zoom').oninput = () => updateZoomLabel();
 $('zoom').onchange = e => setZoom(e.target.value);
 $('torchBtn').onclick = toggleTorch;
@@ -1355,6 +1579,7 @@ $('stat-dupes').onclick = () => togglePanel('dupesPanel');
 document.querySelectorAll('[data-close]').forEach(b => b.onclick = () => $(b.dataset.close).classList.remove('visible'));
 const bind = (id, key, num) => { const el = $(id); el.value = S[key]; el.onchange = () => { S[key] = num ? +el.value : el.value; saveSettings(); onSetting(key); }; };
 bind('setModel', 'model'); bind('setBackend', 'backend'); bind('setSize', 'size'); bind('setTiles', 'tiles'); bind('setDense', 'dense');
+if ($('setPose')) bind('setPose', 'pose');
 bind('setLensMode', 'lensMode'); bind('setCmc', 'cmc'); bind('setHigh', 'high', true); bind('setLow', 'low', true); bind('setConfirm', 'confirm', true); bind('setThreads', 'threads');
 $('setLens').onchange = () => { S.lens = $('setLens').value; S.lensMode = 'manual'; $('setLensMode').value = 'manual'; saveSettings(); if (running) switchLens(S.lens); };
 function onSetting(key) {
@@ -1363,6 +1588,10 @@ function onSetting(key) {
   if (key === 'dense') {
     if (S.dense === 'off') dense.active = false;
     if (S.dense === 'on') { dense.active = true; dense.failed = false; if (running) startDenseWorker(); }
+  }
+  if (key === 'pose') {
+    if (S.pose === 'off') { pose.status = 'off'; pose.mode = 'stand-in'; pose.ok = false; pose.session = null; }
+    else { pose = new PoseVerifier(); kickPose(); }
   }
 }
 async function rememberThreadFlag(on) {
@@ -1412,5 +1641,6 @@ setupThreads(false);
 window.addEventListener('error', e => logErr('Error', e.error || e.message));
 window.addEventListener('unhandledrejection', e => logErr('Promise', e.reason));
 if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) status('Camera not available here (needs 127.0.0.1 or https)', 'error');
+applyUiMode();
 uiTick();
 })();
